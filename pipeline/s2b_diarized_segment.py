@@ -115,7 +115,7 @@ def pack_entries(entries, speaker, target_ms, min_ms, max_ms):
 
 
 def segment_raw(raw_path, cfg, channels, rows, key) -> int:
-    channel, videoid = parse_raw_name(raw_path)
+    channel, videoid = parse_raw_name(raw_path, channels.keys())
     ch_cfg = channels.get(channel)
     if ch_cfg is None or not ch_cfg.get("diarized"):
         return 0

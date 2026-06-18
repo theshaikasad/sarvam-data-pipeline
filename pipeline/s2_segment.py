@@ -35,9 +35,18 @@ def load_config(path: str = CONFIG_PATH) -> dict:
         return yaml.safe_load(f)
 
 
-def parse_raw_name(path: str) -> tuple[str, str]:
-    """data/raw/<channel>_<videoid>.wav -> (channel, videoid). channel may contain '_'."""
+def parse_raw_name(path: str, channel_names=()) -> tuple[str, str]:
+    """data/raw/<channel>_<videoid>.wav -> (channel, videoid).
+
+    BOTH the channel name (e.g. EN_Podcast_Solo) AND the YouTube id (e.g. DV1zxu47_mA) can
+    contain underscores, so a blind rpartition('_') is wrong. Match the basename against the
+    KNOWN channel names (longest first, so En_Comedy doesn't shadow a longer name) and treat
+    the remainder as the video id. Falls back to rpartition only if nothing matches.
+    """
     base = os.path.splitext(os.path.basename(path))[0]
+    for name in sorted(channel_names, key=len, reverse=True):
+        if base.startswith(name + "_"):
+            return name, base[len(name) + 1:]
     channel, _, videoid = base.rpartition("_")
     return channel, videoid
 
@@ -74,7 +83,7 @@ def pack_spans(spans, target_ms, min_ms, max_ms):
 
 
 def segment_raw(raw_path: str, cfg: dict, channels: dict, rows: dict) -> int:
-    channel, videoid = parse_raw_name(raw_path)
+    channel, videoid = parse_raw_name(raw_path, channels.keys())
     ch_cfg = channels.get(channel)
     if ch_cfg is None:
         print(f"  [skip] {os.path.basename(raw_path)}: channel '{channel}' not in config.")

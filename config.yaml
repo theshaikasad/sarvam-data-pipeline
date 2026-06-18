@@ -71,7 +71,7 @@ channels:
     url_or_playlist: "https://youtu.be/9Q7Zl3OI4us"        # placeholder, edit me
     language: en-IN
     source_type: public_lecture
-    gender: unknown     # SET ME after picking the talk (TED speakers vary)
+    gender: male
     solo: true          # TED talks are single-speaker
     max_videos: 5
   - name: EN_Audiobook

@@ -91,7 +91,10 @@ def run(config_path: str = CONFIG_PATH) -> None:
     # whose pitch modulation the binary gender CNN reads as a second, "female" speaker), so we
     # skip that rejection for solo channels — music/noise checks still apply. Human ground
     # truth beats a noisy heuristic.
-    solo_channels = {c["name"] for c in cfg["channels"] if c.get("solo")}
+    # `solo` channels were human-verified single-speaker; `diarized` channels were reduced to
+    # one dominant speaker by s2b. Both already guarantee a single speaker, so they skip the
+    # noisy gender-based multi-speaker guard (which false-positives on expressive solo voices).
+    solo_channels = {c["name"] for c in cfg["channels"] if c.get("solo") or c.get("diarized")}
     rows = state.load(cfg["paths"]["manifest"])
 
     pending = list(state.by_stage(rows, "segmented"))
