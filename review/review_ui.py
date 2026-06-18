@@ -1,25 +1,14 @@
-"""Gradio human-verification UI — ONE screen, big and readable, everything a human checks.
+"""Minimal Gradio review UI: listen -> fix the transcript -> Update saves to the manifest.
 
-Built for a non-technical reviewer (e.g. a Telugu-speaking grandparent) AND for you. The
-SAME app serves both: a one-click LANGUAGE SWITCH at the top means each person only sees
-their language (grandma -> 🟠 Telugu, you -> 🔵 English).
+Deliberately plain: uniform text size, Back / Next navigation, a single Update button that
+writes any edits, and Reject. No reviewer-name box, no emoji clutter. Language + scope
+toggles at the top (grandma -> Telugu; scope = the gold subset, all kept clips, or rejected).
 
-Per clip the reviewer judges the four things only a HUMAN (with ears) can settle, and that
-export actually merges (`final_* = human_* or machine_*`):
-  1. 📝 transcript   — read along, fix any wrong word
-  2. 😊 emotion      — how does it FEEL? (big emoji buttons, so no English reading needed)
-  3. 🤫 whisper      — is it whispered?
-  4. 🎭 style        — how is it spoken? (emoji buttons)
-The acoustic Parler axes (pitch / speaking-rate / recording-quality bins) are machine-only
-by design — there is no human override for them — so they are deliberately NOT shown here.
+Every Update/Reject writes data/manifest.jsonl via state.py and HONORS the no-overwrite rule:
+it only sets human_* fields (+ stage/rejected_reason) and NEVER touches asr_* or llm_*.
+Reviewer name comes from the REVIEWER env var (default "reviewer").
 
-Reads/writes data/manifest.jsonl via state.py and HONORS the no-overwrite rule: only writes
-human_* fields + stage/rejected_reason, and NEVER touches asr_* or llm_*. The machine guess
-is pre-selected so the job is "confirm, or change" — and when the audio model DISAGREES with
-the text-LLM emotion, the clip is flagged "listen carefully" so hard cases aren't rubber-stamped.
-
-Run:
-    REVIEWER="Ammamma" python review/review_ui.py
+Run:  python review/review_ui.py        (or REVIEWER="Ammamma" python review/review_ui.py)
 """
 
 from __future__ import annotations
@@ -40,24 +29,11 @@ EMOTIONS = CFG["taxonomy"]["emotion"]
 STYLES = CFG["taxonomy"]["style"]
 CLIPS_DIR = CFG["paths"]["clips"]
 MANIFEST = CFG["paths"]["manifest"]
+REVIEWER = os.environ.get("REVIEWER", "reviewer")
 
-# Emoji labels make the choices intuitive at a glance — judged by SOUND, not by reading an
-# English word. The stored VALUE is always the plain taxonomy word; emoji is only shown.
-EMOTION_EMOJI = {
-    "neutral": "😐", "happy": "😊", "sad": "😢", "angry": "😠", "excited": "🤩",
-    "calm": "😌", "fearful": "😨", "surprised": "😲", "serious": "🧐", "playful": "😜",
-}
-STYLE_EMOJI = {
-    "narrative": "📖", "conversational": "💬", "oratorical": "🗣️",
-    "instructional": "🎓", "devotional": "🙏", "dramatic": "🎭",
-}
-EMOTION_CHOICES = [(f"{EMOTION_EMOJI.get(e, '')} {e}", e) for e in EMOTIONS]
-STYLE_CHOICES = [(f"{STYLE_EMOJI.get(s, '')} {s}", s) for s in STYLES]
+LANGS = [("Telugu", "te-IN"), ("English", "en-IN")]
+SCOPES = [("Gold sample", "gold"), ("All clips", "all"), ("Rejected", "rejected")]
 
-LANGS = [("🟠 Telugu", "te-IN"), ("🔵 English", "en-IN")]
-DEFAULT_LANG = "te-IN"
-
-# A single in-memory copy of the manifest for this session, persisted on every action.
 rows = state.load(MANIFEST)
 
 
@@ -65,173 +41,129 @@ def now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
-# Review scope: the curated gold subset (default), every kept clip (to listen to the WHOLE
-# dataset), or the rejected clips (to audit the music/noise filters by ear).
-SCOPES = [("⭐ Gold sample", "gold"), ("📋 All clips", "all"), ("🗑️ Rejected (audit)", "rejected")]
-DEFAULT_SCOPE = "gold"
-
-
-def pending_for(lang: str, scope: str = DEFAULT_SCOPE) -> list[str]:
-    """Clip_ids for the chosen language and review scope."""
+def pending_for(lang: str, scope: str) -> list[str]:
     def keep(r) -> bool:
         if r.get("language") != lang:
             return False
-        if scope == "gold":      # the normal review queue: stratified, not-yet-verified
+        if scope == "gold":
             return (bool(r.get("gold_candidate")) and not r.get("human_verified")
                     and r.get("stage") != "rejected")
-        if scope == "rejected":  # audit what the pipeline dropped
+        if scope == "rejected":
             return r.get("stage") == "rejected"
-        return r.get("stage") != "rejected"  # "all": every kept clip
+        return r.get("stage") != "rejected"
     return [cid for cid, r in sorted(rows.items()) if keep(r)]
 
 
 def render(plist: list[str], idx: int):
-    """Return component updates for the clip at plist[idx] (or a done message)."""
     total = len(plist)
     if total == 0:
-        return (None, "", EMOTIONS[0], False, STYLES[0],
-                "## 🎉 No clips to review in this language yet.")
-    if idx >= total:
-        return (None, "", EMOTIONS[0], False, STYLES[0],
-                f"## 🎉 All {total} clips done — thank you! 🙏")
+        return (None, "", EMOTIONS[0], STYLES[0], False, "No clips here.",
+                gr.update(value="Update"))
+    idx = max(0, min(idx, total - 1))
     cid = plist[idx]
     r = rows[cid]
-    audio = os.path.join(CLIPS_DIR, f"{cid}.wav")
-
-    # Progress + a gentle nudge when the two automatic emotion opinions (text LLM vs audio
-    # model, s6/s4b) disagree — those are exactly the clips worth a careful listen.
-    info = f"## Clip {idx + 1} of {total}"
-    if r.get("audio_emotion") and r.get("emotion_agree") == "disagree":
-        info += "\n### ⚠️ చెవి పెట్టి వినండి · listen carefully to the feeling"
+    verified = bool(r.get("human_verified"))
+    ndone = sum(1 for c in plist if rows[c].get("human_verified"))
+    status = "✅ VERIFIED" if verified else "⬜ not reviewed"
+    info = f"Clip {idx + 1} of {total}  ·  {status}  ·  {ndone}/{total} done"
+    btn = gr.update(value="✓ Update again" if verified else "Update")
     return (
-        audio,
+        os.path.join(CLIPS_DIR, f"{cid}.wav"),
         r.get("human_transcript") or r.get("asr_transcript", ""),
         r.get("human_emotion") or r.get("llm_emotion") or EMOTIONS[0],
-        bool(r.get("human_whisper") if "human_whisper" in r else r.get("whisper", False)),
         r.get("human_style") or r.get("llm_style") or STYLES[0],
+        bool(r.get("human_whisper") if "human_whisper" in r else r.get("whisper", False)),
         info,
+        btn,
     )
 
 
-def load_lang(lang: str, scope: str = DEFAULT_SCOPE):
+def load_lang(lang: str, scope: str):
     plist = pending_for(lang, scope)
     return (plist, 0, *render(plist, 0))
 
 
-def verify(plist, idx, transcript, emotion, whisper, style, reviewer):
-    if idx < len(plist):
+def go(plist, idx, step):
+    return (max(0, min(idx + step, len(plist) - 1)) if plist else 0,
+            *render(plist, idx + step))
+
+
+def update(plist, idx, transcript, emotion, style, whisper):
+    """Save edits to the current clip's human_* fields, then move to the next."""
+    if plist and 0 <= idx < len(plist):
         cid = plist[idx]
-        fields = dict(
-            human_transcript=transcript,
-            human_emotion=emotion,
-            human_whisper=bool(whisper),
-            human_verified=True,
-            reviewer=reviewer or os.environ.get("REVIEWER", "reviewer"),
-            reviewed_at=now(),
-        )
-        # Only record human_style when it differs from the machine guess (keeps the manifest
-        # honest about what the human actually changed; export falls back to llm_style).
+        fields = dict(human_transcript=transcript, human_emotion=emotion,
+                      human_whisper=bool(whisper), human_verified=True,
+                      reviewer=REVIEWER, reviewed_at=now())
         if style != rows[cid].get("llm_style"):
             fields["human_style"] = style
         state.update(rows, cid, **fields)
         state.save(rows, MANIFEST)
-    return (idx + 1, *render(plist, idx + 1))
+    nxt = min(idx + 1, len(plist) - 1) if plist else 0
+    return (nxt, *render(plist, nxt))
 
 
 def reject(plist, idx):
-    if idx < len(plist):
+    if plist and 0 <= idx < len(plist):
         state.update(rows, plist[idx], stage="rejected", rejected_reason="manual_review")
         state.save(rows, MANIFEST)
-    return (idx + 1, *render(plist, idx + 1))
+    nxt = min(idx + 1, len(plist) - 1) if plist else 0
+    return (nxt, *render(plist, nxt))
 
 
-def go_back(plist, idx):
-    nidx = max(0, idx - 1)
-    return (nidx, *render(plist, nidx))
-
-
-def skip(plist, idx):
-    return (idx + 1, *render(plist, idx + 1))
-
-
+# Uniform TEXT size — scoped to text elements only, NOT the audio player (a wildcard there
+# collapses its play-button icon). Then explicitly size the player's control icons.
 CSS = """
-.gradio-container {max-width: 1000px !important; margin: auto !important;}
-#info {text-align: center;}
-#info h2 {font-size: 40px !important; margin-bottom: 4px;}
-#info h3 {font-size: 26px !important; color: #b54708 !important; margin-top: 6px;}
-#instructions {font-size: 24px !important; text-align: center; color: #333;}
-#transcript textarea {font-size: 40px !important; line-height: 1.6 !important;
-    padding: 18px !important;}
-#transcript label, #reviewer label,
-#emotion span, #style span, #whisper span,
-#emotion legend, #style legend {font-size: 24px !important; font-weight: 600;}
-#emotion label, #style label {font-size: 24px !important; padding: 10px 14px !important;}
-#whisper label {font-size: 24px !important;}
-button {font-size: 28px !important; padding: 22px !important; font-weight: 700 !important;}
-#verify {background: #1a7f37 !important; color: white !important;}
-#reject {background: #c0392b !important; color: white !important;}
+.gradio-container {max-width: 880px !important; margin: auto !important;}
+#info {text-align: center; font-weight: 700; font-size: 22px !important; padding: 6px 0;}
+#transcript textarea {font-size: 22px !important; line-height: 1.6 !important;}
+label span, .gradio-container label {font-size: 20px !important;}
+#back, #update, #reject, #next {font-size: 22px !important; padding: 16px !important;
+    font-weight: 700 !important;}
+#update {background: #1a7f37 !important; color: #fff !important;}
+#reject {background: #c0392b !important; color: #fff !important;}
+/* keep the audio player's play / skip icons clearly visible */
+#audio svg {width: 26px !important; height: 26px !important;}
+#audio button {opacity: 1 !important;}
 """
 
-
-with gr.Blocks(title="TTS gold review", theme=gr.themes.Soft(), css=CSS) as app:
+with gr.Blocks(title="Review", elem_id="app") as app:
     plist_state = gr.State([])
     idx_state = gr.State(0)
 
-    gr.Markdown("# 🎧 వినండి & సరిచూడండి  (Listen & Check)")
-    gr.Markdown(
-        "**1.** ▶️ వినండి (listen).  "
-        "**2.** 📝 అక్షరాలు సరిచూసి తప్పుంటే సరిచేయండి (fix wrong words).  "
-        "**3.** 😊 ఏ భావం? · 🎭 ఎలా మాట్లాడుతున్నారు? బొమ్మ ఎంచుకోండి (tap how it feels / sounds).  "
-        "**4.** ✅ **సరి (Correct)** నొక్కండి · క్లిప్ చెడ్డదైతే ❌ **Reject**.",
-        elem_id="instructions",
-    )
-
     with gr.Row():
-        lang = gr.Radio(LANGS, value=DEFAULT_LANG, label="Language to review · భాష",
-                        elem_id="langpick")
-        scope = gr.Radio(SCOPES, value=DEFAULT_SCOPE, label="Show",
-                         elem_id="scopepick")
-        reviewer = gr.Textbox(label="Your name · మీ పేరు",
-                              value=os.environ.get("REVIEWER", "reviewer"),
-                              elem_id="reviewer")
+        lang = gr.Radio(LANGS, value="te-IN", label="Language")
+        scope = gr.Radio(SCOPES, value="all", label="Show")
 
     info = gr.Markdown(elem_id="info")
-    audio = gr.Audio(type="filepath", label="▶️ Clip", autoplay=True, elem_id="audio")
-    transcript = gr.Textbox(label="📝 ఇది సరిగ్గా ఉందా? (edit if wrong)", lines=4,
-                            elem_id="transcript")
-    emotion = gr.Radio(EMOTION_CHOICES, label="😊 ఏ భావం? · How does it FEEL?",
-                       elem_id="emotion")
-    whisper = gr.Checkbox(label="🤫 గుసగుసలా మాట్లాడుతున్నారా? · Whispering?",
-                          elem_id="whisper")
-    style = gr.Radio(STYLE_CHOICES, label="🎭 ఎలా మాట్లాడుతున్నారు? · Speaking style",
-                     elem_id="style")
+    audio = gr.Audio(type="filepath", label="Clip", interactive=False, autoplay=True,
+                     elem_id="audio")
+    transcript = gr.Textbox(label="Transcript (edit if wrong)", lines=5, elem_id="transcript")
+    with gr.Row():
+        emotion = gr.Dropdown(EMOTIONS, label="Emotion")
+        style = gr.Dropdown(STYLES, label="Style")
+        whisper = gr.Checkbox(label="Whisper?")
 
     with gr.Row():
-        back_btn = gr.Button("⬅️ Back")
-        skip_btn = gr.Button("⏭️ Skip")
-        reject_btn = gr.Button("❌ Reject", elem_id="reject")
-        verify_btn = gr.Button("✅ సరి · Correct & Next", variant="primary",
-                               elem_id="verify")
+        back_btn = gr.Button("⬅ Back", elem_id="back")
+        update_btn = gr.Button("Update", elem_id="update")
+        reject_btn = gr.Button("Reject", elem_id="reject")
+        next_btn = gr.Button("Next ➡", elem_id="next")
 
-    displays = [audio, transcript, emotion, whisper, style, info]
+    displays = [audio, transcript, emotion, style, whisper, info, update_btn]
 
-    # Switching language OR scope reloads the queue and resets to clip 1.
     lang.change(load_lang, [lang, scope], [plist_state, idx_state, *displays])
     scope.change(load_lang, [lang, scope], [plist_state, idx_state, *displays])
     app.load(load_lang, [lang, scope], [plist_state, idx_state, *displays])
 
-    verify_btn.click(verify,
-                     [plist_state, idx_state, transcript, emotion, whisper, style, reviewer],
+    back_btn.click(lambda p, i: go(p, i, -1), [plist_state, idx_state], [idx_state, *displays])
+    next_btn.click(lambda p, i: go(p, i, 1), [plist_state, idx_state], [idx_state, *displays])
+    update_btn.click(update, [plist_state, idx_state, transcript, emotion, style, whisper],
                      [idx_state, *displays])
     reject_btn.click(reject, [plist_state, idx_state], [idx_state, *displays])
-    back_btn.click(go_back, [plist_state, idx_state], [idx_state, *displays])
-    skip_btn.click(skip, [plist_state, idx_state], [idx_state, *displays])
 
 
 if __name__ == "__main__":
-    counts = {label: len(pending_for(code)) for label, code in LANGS}
-    if not any(counts.values()):
-        print("No gold candidates pending review. Run review/gold_sample.py first.")
-    else:
-        print("Pending review:", ", ".join(f"{k}={v}" for k, v in counts.items()))
-    app.launch()
+    counts = {lbl: len(pending_for(code, "all")) for lbl, code in LANGS}
+    print("Clips (all):", ", ".join(f"{k}={v}" for k, v in counts.items()))
+    app.launch(theme=gr.themes.Soft(), css=CSS)
