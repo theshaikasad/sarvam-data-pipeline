@@ -1,51 +1,114 @@
 # sarvam-tts-dataset config — see CLAUDE.md for the contract.
 # Fill in real URLs after listening to ~3 min of each channel (swap if music bed /
 # multi-speaker / bad mic). url_or_playlist may be a single video or a playlist URL.
+#
+# ADD MORE SOURCES: copy any block below, give it a UNIQUE one-word `name`, paste the
+# video/playlist URL, set language (te-IN / en-IN) and a source_type label. For emotion
+# DIVERSITY pick different genres (storytelling=sad/excited, motivational=excited/serious,
+# comedy=happy/playful, devotional=calm, lecture=neutral). Any url left as "XXXX" (or not
+# a real http link) is skipped, so unused slots are harmless.
+#
+# GENDER: `gender` describes THE SINGLE SPEAKER whose voice ends up in this source's clips.
+# Why hardcode it at all? pitch_bin (low/moderate/high) is computed PER-GENDER (male and
+# female voices live in different Hz ranges, see s6), and it's exported as a column. So the
+# binner needs to know the voice range. For a true solo channel (one narrator/lecturer) you
+# KNOW the speaker, so set male/female once — that's more reliable than per-clip detection.
+#   - SOLO source            -> set male / female.
+#   - MULTI-SPEAKER source (a 2-person podcast, mixed genders): DON'T guess. Add
+#     `diarized: true` (see below) so s2b keeps only the ONE dominant speaker, and leave
+#     `gender: unknown`. s3 then detects gender per clip (`gender_detected`) and s6 uses that
+#     to bin pitch. You never have to know who the dominant speaker is ahead of time.
+#   - UNSURE -> `unknown` is always safe; it just falls back to a gender-agnostic pitch cutoff
+#     (or to the per-clip detected gender when available).
+# Roster note: the real URLs below are mostly male -> point the empty XXXX slots at FEMALE
+# speakers to avoid a 100%-male dataset.
 
 channels:
   # --- Telugu (~30 min target) ---
   - name: Harshaneeyam
-    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    url_or_playlist: "https://youtu.be/pSCpQ4-9mh4"        # placeholder, edit me
     language: te-IN
     source_type: podcast_storytelling
+    gender: male
     max_videos: 5
   - name: BV_Pattabhiram
-    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    url_or_playlist: "https://youtu.be/JbHWzr8Sib0"        # placeholder, edit me
     language: te-IN
     source_type: public_lecture
+    gender: male
     max_videos: 5
   - name: Garikapati
-    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    url_or_playlist: "https://youtu.be/bVbXU7fq0ak"        # placeholder, edit me
     language: te-IN
     source_type: public_lecture
+    gender: male
+    max_videos: 5
+  - name: Te_Comedy
+    url_or_playlist: "https://youtu.be/XXXX"               # solo comedy/light -> happy/playful
+    language: te-IN
+    source_type: podcast_independent
+    gender: female      # pick a FEMALE speaker here to balance the male-heavy roster
+    max_videos: 5
+  - name: Te_Devotional
+    url_or_playlist: "https://youtu.be/XXXX"               # devotional/calm narration -> calm
+    language: te-IN
+    source_type: public_lecture
+    gender: female      # pick a FEMALE speaker here to balance the male-heavy roster
     max_videos: 5
 
   # --- Indian English (~30 min target) ---
   - name: TED_India
-    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    url_or_playlist: "https://youtu.be/9Q7Zl3OI4us"        # placeholder, edit me
     language: en-IN
     source_type: public_lecture
+    gender: unknown     # SET ME after picking the talk (TED speakers vary)
     max_videos: 5
   - name: EN_Audiobook
-    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    url_or_playlist: "https://youtu.be/nIWdyT7IXzc"        # placeholder, edit me
     language: en-IN
     source_type: audiobook
+    gender: unknown     # SET ME to the narrator's gender
     max_videos: 5
   - name: EN_Podcast_Solo
-    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    url_or_playlist: "https://youtu.be/9lGoZDUCVWI"        # placeholder, edit me
     language: en-IN
     source_type: podcast_independent
+    gender: male
+    max_videos: 5
+  - name: En_Motivational
+    url_or_playlist: "https://youtu.be/XXXX"               # motivational speech -> excited/angry
+    language: en-IN
+    source_type: public_lecture
+    gender: female      # pick a FEMALE speaker here to balance the male-heavy roster
+    max_videos: 5
+  - name: En_Comedy
+    url_or_playlist: "https://youtu.be/XXXX"               # solo standup/comedy -> happy/playful
+    language: en-IN
+    source_type: podcast_independent
+    gender: female      # pick a FEMALE speaker here to balance the male-heavy roster
     max_videos: 5
 
 # --- Segmentation / clip sizing (stay safely under Saaras sync 30s limit) ---
+# Default segmentation is VAD/silence packing (s2_segment.py) — best for SOLO sources.
+# For a MULTI-SPEAKER source (2-person podcast / interview, comedy with crowd talk-back, any
+# mixed-gender conversation) add `diarized: true` to that channel block above. Then
+# s2b_diarized_segment.py runs the Sarvam Batch API with diarization on the whole recording,
+# keeps ONLY the dominant speaker's phrase chunks, and packs them into single-speaker clips —
+# so the guest/second voice is dropped, not separated. s2 skips diarized channels; s2b
+# handles them. (Without `diarized: true`, s3's cheap mixed-gender guard would instead just
+# REJECT the clips where both voices appear — safe but wasteful. Diarization salvages them.)
 target_clip_seconds: 25
 min_clip_seconds: 18
 max_clip_seconds: 28
 min_silence_ms: 300
 silence_thresh_db: -38
 
-# --- Music filter ---
+# --- Music / noise / multi-speaker filter (s3) ---
 music_overlap_reject_threshold: 0.10   # reject clip if music overlaps >10%
+noise_overlap_reject_threshold: 0.25   # reject clip if applause/laughter/crowd noise >25%
+multispeaker_min_fraction: 0.15        # reject if BOTH male & female speech each exceed this
+                                       #   (cheap mixed-gender multi-speaker guard; true
+                                       #    diarization-based single-speaker is the s2b path)
 
 # --- Audio format ---
 sample_rate: 16000
@@ -59,6 +122,45 @@ asr:
 llm:
   model: "sarvam-30b"
   base_url: "https://api.sarvam.ai/v1"
+
+# --- Audio emotion (s4b): a SECOND, audio-grounded opinion on emotion ---
+# Sarvam has no emotion API (Bulbul V3 infers prosody; Saaras is ASR-only), so the LLM tag
+# (s6) is text-based. This stage runs a speech-emotion model directly on the waveform — the
+# acoustic signal the text LLM cannot see — then flags LLM<->audio DISAGREEMENT so human
+# review (the actual ground truth) is spent where the two opinions conflict.
+audio_emotion:
+  enabled: true
+  # backend: "categorical" (label-matched SER head, default) or "dimensional" (arousal/
+  # valence/dominance regression). Categorical gives emotions on OUR taxonomy axis directly.
+  backend: "categorical"
+  # Default: RAVDESS-trained, 8 classes incl. `calm` -> matches 7/10 of our taxonomy.
+  # RECOMMENDED multilingual upgrade (covers Tamil, the closest big language to Telugu, and
+  # also emits VAD dims): set model "MERaLiON/MERaLiON-SER-v1" + trust_remote_code true.
+  model: "ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition"
+  trust_remote_code: false
+  # Map the model's native labels (lowercased) onto our taxonomy. The model can't emit
+  # excited/serious/playful (no acted SER dataset has them) so they never appear; `disgust`
+  # isn't in our taxonomy, so we fold it onto the nearest negative-activated class.
+  label_map:
+    angry: angry
+    anger: angry
+    calm: calm
+    disgust: angry
+    disgusted: angry
+    fear: fearful
+    fearful: fearful
+    happy: happy
+    joy: happy
+    neutral: neutral
+    sad: sad
+    sadness: sad
+    surprise: surprised
+    surprised: surprised
+  # Quadrant cutoffs on the [0,1] dims (only used when backend: dimensional).
+  arousal_high: 0.55
+  arousal_low: 0.45
+  valence_high: 0.55
+  valence_low: 0.45
 
 # --- Taxonomy (Parler-aligned; see CLAUDE.md) ---
 taxonomy:

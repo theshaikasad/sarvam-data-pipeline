@@ -34,7 +34,7 @@ def download_channel(channel: dict, raw_dir: str, archive: str) -> None:
     """Fetch audio for one channel's url_or_playlist into <channel>_<id>.src.<ext>."""
     name = channel["name"]
     url = channel.get("url_or_playlist")
-    if not url or "XXXX" in str(url):
+    if not url or "XXXX" in str(url) or not str(url).startswith("http"):
         print(f"  [skip] {name}: no real URL set (placeholder).")
         return
     max_videos = int(channel.get("max_videos", 1))

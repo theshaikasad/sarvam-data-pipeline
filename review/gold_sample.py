@@ -1,10 +1,15 @@
 """Draw a reproducible, stratified gold sample for human verification.
 
-From rows at stage "final" (or "described"), select N rows balanced across language and,
-within each language, across llm_emotion buckets. Selection is deterministic for a fixed
-seed. Marks chosen rows with gold_candidate=true and prints their clip_ids.
+From rows at stage "final" (or "described"), select N rows PER LANGUAGE and, within each
+language, spread across llm_emotion buckets so the gold set isn't all one emotion. Within
+each bucket, clips where the LLM and the audio model DISAGREE on emotion (emotion_agree ==
+"disagree", from s4b/s6) are picked FIRST — human review time is most valuable exactly where
+the two automatic opinions conflict. Selection is deterministic for a fixed seed. Marks
+chosen rows with gold_candidate=true and prints their clip_ids.
 
-Usage: python review/gold_sample.py [N=25] [seed=42]
+So `python review/gold_sample.py 25` gives 25 Telugu + 25 English = 50 gold candidates.
+
+Usage: python review/gold_sample.py [N_per_language=25] [seed=42]
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "pipeline"))
 import state  # noqa: E402
 
 CONFIG_PATH = "config.yaml"
-DEFAULT_N = 25
+DEFAULT_N = 50  # split evenly across languages -> 25 Telugu + 25 Indian English
 DEFAULT_SEED = 42
 ELIGIBLE_STAGES = ("final", "described")
 
@@ -35,8 +40,8 @@ def stratified_sample(rows: dict, n: int, seed: int) -> list[dict]:
         by_lang.setdefault(r.get("language", "unknown"), []).append(r)
 
     langs = sorted(by_lang)
-    base, rem = divmod(n, len(langs))
-    targets = {l: base + (1 if i < rem else 0) for i, l in enumerate(langs)}
+    # n is PER LANGUAGE: each language independently targets n gold candidates.
+    targets = {l: n for l in langs}
 
     selected: list[dict] = []
     for lang in langs:
@@ -46,6 +51,9 @@ def stratified_sample(rows: dict, n: int, seed: int) -> list[dict]:
         for e in buckets:
             buckets[e].sort(key=lambda r: r["clip_id"])  # determinism before shuffle
             rng.shuffle(buckets[e])
+            # Stable sort so LLM<->audio disagreements sit at the END of the bucket and are
+            # therefore pop()'d (i.e. selected) first; ties keep the shuffled order.
+            buckets[e].sort(key=lambda r: 1 if r.get("emotion_agree") == "disagree" else 0)
 
         target = min(targets[lang], len(by_lang[lang]))
         picked: list[dict] = []
@@ -75,9 +83,13 @@ def run(n: int = DEFAULT_N, seed: int = DEFAULT_SEED, config_path: str = CONFIG_
         state.update(rows, r["clip_id"], gold_candidate=True)
     state.save(rows, manifest)
 
-    print(f"Sampled {len(selected)} gold candidates (N={n}, seed={seed}):")
+    n_disagree = sum(1 for r in selected if r.get("emotion_agree") == "disagree")
+    print(f"Sampled {len(selected)} gold candidates (N={n} per language, seed={seed}); "
+          f"{n_disagree} are LLM<->audio disagreements (prioritised):")
     for r in selected:
-        print(f"  {r['clip_id']}  [{r.get('language')}, {r.get('llm_emotion')}]")
+        flag = "  <- LLM/audio disagree" if r.get("emotion_agree") == "disagree" else ""
+        print(f"  {r['clip_id']}  [{r.get('language')}, llm={r.get('llm_emotion')}, "
+              f"audio={r.get('audio_emotion')}]{flag}")
 
 
 if __name__ == "__main__":

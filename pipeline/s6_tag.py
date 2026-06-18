@@ -13,7 +13,10 @@ error stay at "transcribed" for retry.
 
 Bin thresholds are heuristic (graded on judgment, so kept explicit and tweakable):
   speaking_rate (chars/s): <7 very_slow, <10 slow, <14 measured, <18 fast, else very_fast
-  pitch_mean (Hz, gender-agnostic fallback): <140 low, <=220 moderate, else high
+  pitch_mean (Hz) binned PER-GENDER (low/moderate/high relative to that voice's range):
+    male:    <110 low, <=155 moderate, else high
+    female:  <185 low, <=235 moderate, else high
+    unknown: <140 low, <=220 moderate, else high   (gender-agnostic fallback)
   pitch_std (Hz): <20 monotone, <=50 moderate, else animated
   recording_quality (from music_confidence): <0.02 clean, <0.10 slight_noise, else noisy
 """
@@ -28,6 +31,7 @@ import sys
 import yaml
 
 sys.path.insert(0, os.path.dirname(__file__))
+import emotion_map  # noqa: E402
 import state  # noqa: E402
 
 CONFIG_PATH = "config.yaml"
@@ -56,10 +60,15 @@ def rate_bin(r):
             if r < 14 else "fast" if r < 18 else "very_fast")
 
 
-def pitch_bin(p):
+# Per-gender (low, high) cutoffs: pitch < low -> "low", <= high -> "moderate", else "high".
+PITCH_CUTOFFS = {"male": (110, 155), "female": (185, 235), "unknown": (140, 220)}
+
+
+def pitch_bin(p, gender="unknown"):
     if p is None:
         return None
-    return "low" if p < 140 else "moderate" if p <= 220 else "high"
+    low, high = PITCH_CUTOFFS.get(gender or "unknown", PITCH_CUTOFFS["unknown"])
+    return "low" if p < low else "moderate" if p <= high else "high"
 
 
 def variation_bin(s):
@@ -68,8 +77,9 @@ def variation_bin(s):
     return "monotone" if s < 20 else "moderate" if s <= 50 else "animated"
 
 
-def quality_bin(music_conf):
-    mc = music_conf or 0.0
+def quality_bin(music_conf, noise_conf=0.0):
+    # Worst of music-bed and crowd/applause noise drives the perceived recording quality.
+    mc = max(music_conf or 0.0, noise_conf or 0.0)
     return "clean" if mc < 0.02 else "slight_noise" if mc < 0.10 else "noisy"
 
 
@@ -148,9 +158,17 @@ def run(config_path: str = CONFIG_PATH) -> None:
             row["speaking_rate"] = speaking_rate(row.get("asr_transcript", ""),
                                                  row.get("duration", 0))
         row["speaking_rate_bin"] = rate_bin(row.get("speaking_rate"))
-        row["pitch_bin"] = pitch_bin(row.get("pitch_mean"))
+        # pitch_bin is per-gender. Prefer the channel's declared gender; if it's "unknown"
+        # (e.g. a diarized podcast where we didn't know the dominant speaker up front), fall
+        # back to inaSpeechSegmenter's per-clip gender_detected from s3 so the bin is still
+        # calibrated to the right voice range.
+        gender = row.get("gender") or "unknown"
+        if gender == "unknown":
+            gender = row.get("gender_detected") or "unknown"
+        row["pitch_bin"] = pitch_bin(row.get("pitch_mean"), gender)
         row["pitch_variation"] = variation_bin(row.get("pitch_std"))
-        row["recording_quality"] = quality_bin(row.get("music_confidence"))
+        row["recording_quality"] = quality_bin(row.get("music_confidence"),
+                                                row.get("noise_confidence"))
         # 3) LLM tag
         try:
             tags = tag_one(client, model, row, emotions, styles)
@@ -158,6 +176,10 @@ def run(config_path: str = CONFIG_PATH) -> None:
             print(f"  [error] {cid}: {e}")
             errors += 1
             continue
+        # Cross-check against the audio model's vote (s4b) if it has run for this clip.
+        agree = emotion_map.agreement(tags["llm_emotion"], row.get("audio_emotion"))
+        if agree is not None:
+            tags["emotion_agree"] = agree
         state.update(rows, cid, **tags, llm_model=model,
                      annotated_at=datetime.now().isoformat(timespec="seconds"),
                      stage="tagged")

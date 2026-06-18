@@ -4,7 +4,8 @@ Over non-rejected rows, plots:
   - emotion histogram (final emotion = human_emotion or llm_emotion)
   - clip-duration histogram
   - total minutes per language (bar)
-Saves PNGs to report/ and prints the per-language minute totals.
+  - text-LLM vs audio-model emotion agreement (bar), if s4b has run
+Saves PNGs to report/ and prints the per-language minute totals + the agreement rate.
 
 Usage: python eval/distributions.py
 """
@@ -20,6 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "pipeline"))
+import emotion_map  # noqa: E402
 import state  # noqa: E402
 
 CONFIG_PATH = "config.yaml"
@@ -76,11 +78,38 @@ def run(config_path: str = CONFIG_PATH) -> None:
     plt.savefig(os.path.join(OUT_DIR, "language_minutes.png"), dpi=120)
     plt.close()
 
+    # text-LLM vs audio-model emotion agreement (valence/arousal quadrant)
+    agree = Counter()
+    for r in kept:
+        a = emotion_map.agreement(r.get("llm_emotion"), r.get("audio_emotion"))
+        if a is not None:
+            agree[a] += 1
+    n_judged = sum(agree.values())
+    extra_plot = ""
+    if n_judged:
+        plt.figure(figsize=(5, 4))
+        labels = ["agree", "disagree"]
+        plt.bar(labels, [agree.get(l, 0) for l in labels],
+                color=["#1a7f37", "#c0392b"])
+        plt.title("Emotion: text-LLM vs audio model")
+        plt.ylabel("clips")
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUT_DIR, "emotion_agreement.png"), dpi=120)
+        plt.close()
+        extra_plot = ", emotion_agreement"
+
     print(f"Clips (non-rejected): {len(kept)}")
     for lang in langs:
         print(f"  {lang}: {minutes[lang]:.1f} min")
     print(f"  TOTAL: {sum(minutes.values()):.1f} min")
-    print(f"Saved plots to {OUT_DIR}/ (emotion_hist, duration_hist, language_minutes).")
+    if n_judged:
+        pct = 100.0 * agree.get("agree", 0) / n_judged
+        print(f"LLM<->audio emotion agreement: {agree.get('agree', 0)}/{n_judged} "
+              f"({pct:.0f}%); {agree.get('disagree', 0)} disagreements flagged for review.")
+    else:
+        print("LLM<->audio agreement: n/a (run pipeline/s4b_audio_emotion.py).")
+    print(f"Saved plots to {OUT_DIR}/ "
+          f"(emotion_hist, duration_hist, language_minutes{extra_plot}).")
 
 
 if __name__ == "__main__":

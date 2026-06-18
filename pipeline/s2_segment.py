@@ -79,6 +79,9 @@ def segment_raw(raw_path: str, cfg: dict, channels: dict, rows: dict) -> int:
     if ch_cfg is None:
         print(f"  [skip] {os.path.basename(raw_path)}: channel '{channel}' not in config.")
         return 0
+    if ch_cfg.get("diarized"):
+        print(f"  [skip] {os.path.basename(raw_path)}: diarized channel (handled by s2b).")
+        return 0
 
     prefix = f"{channel}_{videoid}_"
     if any(cid.startswith(prefix) for cid in rows):
@@ -110,6 +113,7 @@ def segment_raw(raw_path: str, cfg: dict, channels: dict, rows: dict) -> int:
             source_channel=channel,
             source_type=ch_cfg["source_type"],
             language=ch_cfg["language"],
+            gender=ch_cfg.get("gender", "unknown"),
             start_time=round(start_ms / 1000.0, 3),
             end_time=round(end_ms / 1000.0, 3),
             duration=round((end_ms - start_ms) / 1000.0, 3),

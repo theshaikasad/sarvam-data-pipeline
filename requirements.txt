@@ -9,6 +9,9 @@ jiwer
 matplotlib
 openai
 requests
+sarvamai
+torch
+transformers
 datasets
 huggingface_hub
 gradio

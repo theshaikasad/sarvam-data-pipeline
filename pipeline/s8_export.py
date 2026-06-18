@@ -33,6 +33,7 @@ from datetime import date
 import yaml
 
 sys.path.insert(0, os.path.dirname(__file__))
+import emotion_map  # noqa: E402
 import state  # noqa: E402
 
 CONFIG_PATH = "config.yaml"
@@ -41,12 +42,15 @@ LOCAL_EXPORT_DIR = os.path.join("data", "hf_export")
 
 LANG_NAME = {"te-IN": "Telugu", "en-IN": "Indian English"}
 
-# Final HF columns, in the order CLAUDE.md lists them.
+# Final HF columns. clip_id leads as the stable per-row key (maps back to the manifest);
+# gender backs the per-gender pitch_bin. Otherwise the order CLAUDE.md lists.
 FINAL_COLUMNS = [
-    "audio", "text", "language", "emotion", "style", "whisper",
+    "clip_id", "audio", "text", "language", "emotion", "style", "whisper",
     "speaking_rate_bin", "pitch_bin", "pitch_variation", "recording_quality",
-    "description", "speaker_id", "duration", "source_url", "source_channel",
+    "description", "speaker_id", "gender", "duration", "source_url", "source_channel",
     "source_type", "human_verified", "split",
+    # Audio-model second opinion (s4b): dimensional prosody, language-agnostic.
+    "audio_emotion", "audio_arousal", "audio_valence", "audio_dominance",
 ]
 
 
@@ -105,12 +109,17 @@ def build_records(rows: dict, clips_dir: str) -> list[dict]:
             "recording_quality": row.get("recording_quality"),
             "description": row.get("description", ""),
             "speaker_id": speaker_id(row.get("source_channel", "")),
+            "gender": row.get("gender", "unknown"),
             "duration": float(row.get("duration", 0.0)),
             "source_url": row.get("source_url", ""),
             "source_channel": row.get("source_channel", ""),
             "source_type": row.get("source_type", ""),
             "human_verified": merged["human_verified"],
             "split": merged["split"],
+            "audio_emotion": row.get("audio_emotion") or "unknown",
+            "audio_arousal": row.get("audio_arousal"),
+            "audio_valence": row.get("audio_valence"),
+            "audio_dominance": row.get("audio_dominance"),
         })
     return records
 
@@ -155,6 +164,7 @@ def build_card(records: list[dict], cfg: dict, repo_id: str) -> str:
 
     emotions = Counter(r["emotion"] for r in records)
     styles = Counter(r["style"] for r in records)
+    genders = Counter(r["gender"] for r in records)
 
     # sources table: channel -> (language, source_type, clips, minutes)
     src = {}
@@ -187,9 +197,36 @@ def build_card(records: list[dict], cfg: dict, repo_id: str) -> str:
         ["emotion", "clips"],
         [[e, c] for e, c in emotions.most_common()],
     )
+
+    # LLM (text) vs audio-model emotion agreement, in valence/arousal quadrant space.
+    judged = [(emotion_map.agreement(r["emotion"], r["audio_emotion"]))
+              for r in records if r.get("audio_emotion") not in (None, "unknown")]
+    judged = [a for a in judged if a is not None]
+    if judged:
+        n_agree = judged.count("agree")
+        agree_pct = 100.0 * n_agree / len(judged)
+        agreement_section = (
+            f"The text LLM emotion and the audio model's emotion agree (same "
+            f"valence/arousal quadrant) on **{n_agree}/{len(judged)} "
+            f"({agree_pct:.0f}%)** of clips with both opinions. Disagreements were "
+            f"prioritised for human review; the `gold` split therefore over-samples the "
+            f"hard cases. Per-clip dimensional scores ship as `audio_arousal`, "
+            f"`audio_valence`, `audio_dominance`."
+        )
+    else:
+        agreement_section = (
+            "_No audio-model emotion present (run `pipeline/s4b_audio_emotion.py`). "
+            "When present, this reports text-LLM vs audio agreement and ships dimensional "
+            "`audio_arousal`/`audio_valence`/`audio_dominance` scores._"
+        )
     style_table = _md_table(
         ["style", "clips"],
         [[s, c] for s, c in styles.most_common()],
+    )
+    gender_table = _md_table(
+        ["gender", "clips", "minutes"],
+        [[g, c, f"{sum(r['duration'] for r in records if r['gender'] == g) / 60.0:.1f}"]
+         for g, c in genders.most_common()],
     )
 
     # WER/CER
@@ -279,9 +316,17 @@ Emotion (`final_emotion = human_emotion or llm_emotion`):
 
 {emotion_table}
 
+### Emotion cross-check (text LLM vs audio model)
+
+{agreement_section}
+
 Style (`final_style = human_style or llm_style`):
 
 {style_table}
+
+Speaker gender (one speaker per source; reported honestly — see limitations):
+
+{gender_table}
 
 ## Transcription quality (WER / CER)
 
@@ -298,21 +343,33 @@ final`), with `data/manifest.jsonl` as the single source of truth (one JSON row 
 2. **Segmentation** — VAD/silence detection (silences >= {cfg['min_silence_ms']}ms);
    speech is packed into ~{cfg['min_clip_seconds']}-{cfg['max_clip_seconds']}s windows and
    boundaries land **only inside silences**, so clips never cut mid-word. The ~25s target
-   also keeps every clip under the Saaras v3 30s synchronous limit.
-3. **Music filter (detect & DROP, never repair)** — `inaSpeechSegmenter` labels
-   speech/music; if music overlaps >
-   {int(cfg['music_overlap_reject_threshold'] * 100)}% of a clip it is rejected
-   (`rejected_reason="music_bed"`). Source separation degrades audio and TTS needs clean
-   recordings, so a repaired clip is worse than none. Rejected rows are kept as the
-   iteration log.
+   also keeps every clip under the Saaras v3 30s synchronous limit. A **v2 diarized
+   segmenter** (opt-in per channel) instead uses the Sarvam Batch API with diarization to
+   cut at phrase boundaries inside a single speaker's turns — used for multi-speaker sources.
+3. **Music / crowd-noise / multi-speaker filter (detect & DROP, never repair)** —
+   `inaSpeechSegmenter` (with gender detection) labels speech/music/noise. A clip is rejected
+   if music overlaps >{int(cfg['music_overlap_reject_threshold'] * 100)}%
+   (`music_bed`), if applause/laughter/crowd `noise` exceeds
+   {int(cfg.get('noise_overlap_reject_threshold', 1.0) * 100)}% (`crowd_noise`), or if both
+   male and female speech are present (`multi_speaker`). Source separation degrades audio and
+   TTS needs clean single-speaker recordings, so a repaired clip is worse than none. Rejected
+   rows are kept as the iteration log.
 4. **Acoustic features** — `pitch_mean`/`pitch_std` (librosa YIN, NaNs dropped),
    `energy_rms`, and `speaking_rate`.
+4b. **Audio emotion (second opinion)** — a speech-emotion model runs straight on the
+   waveform and is mapped onto our taxonomy: a label-matched categorical SER classifier by
+   default (the multilingual `MERaLiON-SER-v1` is the recommended option for the Telugu
+   half), or a dimensional arousal/valence/dominance model. This captures *how* a line was
+   delivered — signal the text LLM in step 6 cannot see. Sarvam has no emotion API, so this
+   only **adds** an acoustic cross-check; it never replaces a Sarvam call.
 5. **ASR** — `saaras:v3`, `mode="transcribe"`, with the **known** language code per
    channel (not auto-detect) for higher accuracy. Empty transcripts are rejected
    (`rejected_reason="empty_asr"`).
 6. **Tagging** — acoustic features are binned into Parler axes (speaking rate / pitch /
    pitch variation / recording quality); `sarvam-30b` then assigns emotion, style, and a
-   whisper flag via a strict JSON-only prompt over the transcript + features.
+   whisper flag via a strict JSON-only prompt over the transcript + features. The LLM
+   emotion is then compared against the step-4b audio vote (in valence/arousal quadrant
+   space); **disagreements are flagged and pushed to the front of the human review queue**.
 7. **Description** — `sarvam-30b` composes ONE natural-language sentence from the
    structured fields.
 8. **Human review & export** — a stratified gold sample is verified by a human in a Gradio
@@ -337,11 +394,15 @@ and the structured columns remain available for filtering/conditioning.
 
 ## Columns
 
-`audio` (16kHz), `text` (=`final_transcript`), `language`, `emotion` (=`final_emotion`),
-`style`, `whisper`, `speaking_rate_bin`, `pitch_bin`, `pitch_variation`,
-`recording_quality`, `description`, `speaker_id` (anonymized per source), `duration`,
-`source_url`, `source_channel`, `source_type`, `human_verified`, `split`
-(`"gold"` if human-verified else `"train"`).
+`clip_id` (stable per-clip key, maps back to the manifest), `audio` (16kHz),
+`text` (=`final_transcript`), `language`, `emotion` (=`final_emotion`), `style`, `whisper`,
+`speaking_rate_bin`, `pitch_bin` (binned **per-gender**), `pitch_variation`,
+`recording_quality`, `description`, `speaker_id` (anonymized per source),
+`gender` (per source), `duration`, `source_url`, `source_channel`, `source_type`,
+`human_verified`, `split` (`"gold"` if human-verified else `"train"`),
+`audio_emotion` (coarse vote from the audio model), `audio_arousal` / `audio_valence` /
+`audio_dominance` (dimensional prosody in [0,1], from the audio model — useful for
+continuous TTS conditioning).
 
 ### Taxonomy
 
@@ -358,9 +419,18 @@ and the structured columns remain available for filtering/conditioning.
 - **Machine labels are weak supervision.** Emotion/style/description come from `sarvam-30b`
   over acoustic features; only the `gold` split is human-verified. Treat non-gold labels as
   noisy.
+- **Two automatic emotion opinions, neither is ground truth.** The text LLM sees only the
+  transcript+features; the audio model (`audio_*`) was trained on English/German affective
+  speech (MSP-Podcast), so its absolute calibration on Telugu is approximate. We use it as a
+  *relative* cross-check to surface disagreements for humans, not as a label of record. Only
+  human-verified `gold` emotions should be fully trusted.
 - **ASR errors remain** in non-gold `text`. See the WER/CER section for measured error and
   worst-case examples; CER is higher for Telugu by script nature.
-- **Pitch bins are gender-agnostic heuristics** unless gender was annotated.
+- **Pitch bins** are heuristic but binned **per-gender** (see `gender`); clips with
+  `gender="unknown"` fall back to a gender-agnostic cutoff.
+- **Speaker-gender balance is uneven** — most publicly available solo lecture/podcast
+  sources for these languages are male, so the roster skews male (see distribution below).
+  Female-speaker sources were added deliberately to mitigate, but parity is not guaranteed.
 - **Per-clip single speaker**, but the dataset spans multiple speakers (one per source).
 
 ## Ethics & licensing
@@ -380,7 +450,9 @@ and the structured columns remain available for filtering/conditioning.
 pip install -r requirements.txt
 # set SARVAM_KEY and HF_TOKEN in .env, edit config.yaml channels + hf.repo_id
 python pipeline/s1_download.py && python pipeline/s2_segment.py
+python pipeline/s2b_diarized_segment.py   # only for channels with `diarized: true`
 python pipeline/s3_music_filter.py && python pipeline/s4_features.py
+python pipeline/s4b_audio_emotion.py   # audio-model second opinion on emotion
 python pipeline/s5_asr.py && python pipeline/s6_tag.py && python pipeline/s7_describe.py
 python review/gold_sample.py && python review/review_ui.py   # human verification
 python eval/compute_wer.py && python eval/distributions.py

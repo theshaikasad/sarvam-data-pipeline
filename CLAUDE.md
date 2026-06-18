@@ -34,8 +34,9 @@ quality metrics, and good decisions.
 ```
 config.yaml, requirements.txt, .env.example
 data/{raw, clips, manifest.jsonl}
-pipeline/{state.py, s1_download.py, s2_segment.py, s3_music_filter.py,
-          s4_features.py, s5_asr.py, s6_tag.py, s7_describe.py, s8_export.py}
+pipeline/{state.py, emotion_map.py, s1_download.py, s2_segment.py, s2b_diarized_segment.py,
+ s3_music_filter.py, s4_features.py, s4b_audio_emotion.py, s5_asr.py, s6_tag.py,
+ s7_describe.py, s8_export.py}
 review/{gold_sample.py, review_ui.py}
 eval/{compute_wer.py, distributions.py}
 report/
@@ -63,10 +64,18 @@ It **NEVER** edits `asr_*` or `llm_*` fields. At **EXPORT only**, compute derive
 
 ### Manifest row fields
 - **identity:** `clip_id` (`channel_video_segment`, immutable), `source_url`, `source_channel`,
-  `source_type`, `language`, `start_time`, `end_time`, `duration`
+  `source_type`, `language`, `gender` (per source; backs per-gender `pitch_bin`),
+  `start_time`, `end_time`, `duration`
 - **stage:** `stage`, `rejected_reason`
-- **quality:** `has_music`, `music_confidence`, `snr_estimate`
+- **quality (s3):** `has_music`, `music_confidence`, `has_noise`, `noise_confidence`
+ (applause/laughter/crowd), `has_multi_speaker`, `gender_detected`, `snr_estimate`
 - **acoustic:** `pitch_mean`, `pitch_std`, `energy_rms`, `speaking_rate`
+- **audio emotion (machine, never edited; s4b):** `audio_emotion` (on OUR taxonomy),
+ `audio_emotion_raw` (model's native label), `audio_emotion_score`, `audio_emotion_model`,
+ `emotion_agree` (`agree`/`disagree` vs `llm_emotion`, in valence/arousal quadrant space);
+ dimensional backend also sets `audio_arousal`/`audio_valence`/`audio_dominance` ([0,1])
+- **diarized v2 segmentation (s2b):** `speaker_id` (diarization label), `segmentation`
+ (`diarized_v2` vs default VAD)
 - **asr (machine, never edited):** `asr_transcript`, `asr_model`, `asr_language_detected`, `asr_confidence`
 - **llm tags (machine, never edited):** `llm_emotion`, `llm_style`, `llm_confidence`,
   `llm_reasoning`, `llm_model`, `annotated_at`
@@ -88,16 +97,59 @@ It **NEVER** edits `asr_*` or `llm_*` fields. At **EXPORT only**, compute derive
   variation, recorded clearly with almost no background noise."*
 
 ## Final HF dataset columns (`s8` pushes)
-`audio` (Audio 16kHz), `text` (=`final_transcript`), `language`, `emotion` (=`final_emotion`),
-`style`, `whisper`, `speaking_rate_bin`, `pitch_bin`, `pitch_variation`, `recording_quality`,
-`description`, `speaker_id` (anonymized per source, e.g. `spk_harshaneeyam`), `duration`,
-`source_url`, `source_channel`, `source_type`, `human_verified`,
-`split` (`"gold"` if `human_verified` else `"train"`).
+`clip_id` (stable per-clip key, maps back to the manifest), `audio` (Audio 16kHz),
+`text` (=`final_transcript`), `language`, `emotion` (=`final_emotion`),
+`style`, `whisper`, `speaking_rate_bin`, `pitch_bin` (per-gender), `pitch_variation`,
+`recording_quality`, `description`, `speaker_id` (anonymized per source, e.g.
+`spk_harshaneeyam`), `gender` (per source), `duration`, `source_url`, `source_channel`,
+`source_type`, `human_verified`, `split` (`"gold"` if `human_verified` else `"train"`).
+
+## Emotion: two independent opinions, human is ground truth (document as deliberate)
+Emotion is fundamentally PROSODIC, but the LLM tag (s6) sees only text+binned features.
+So `s4b_audio_emotion.py` runs a speech-emotion model ON THE WAVEFORM — exactly the signal
+the text LLM cannot see. Default `backend: categorical` uses a label-matched SER classifier
+(RAVDESS-trained → 7/10 of our taxonomy incl. `calm`; multilingual `MERaLiON-SER-v1` covers
+Tamil for the Telugu half and is the recommended upgrade) mapped onto our taxonomy via
+`label_map`; `backend: dimensional` instead regresses arousal/valence/dominance. We compare
+the two opinions in valence/arousal quadrant space (`emotion_agree`) and
+**route disagreements to the front of human review** (the real ground truth). This is
+ALLOWED: the assignment only mandates Sarvam for ASR/diarization/LLM, and Sarvam has no
+emotion API — s4b only ADDS an acoustic cross-check, it replaces no Sarvam call. Run order:
+s4 (features) → s4b (audio emotion) → s5 (asr) → s6 (tag, sets `emotion_agree`).
 
 ## Edge-case decisions (document these as deliberate)
-- **Segmentation:** NEVER chop at fixed times (causes mid-word cuts). Use VAD/silence
-  detection and cut only at silences ≥300ms, packing speech into ~22–28s windows.
-  Boundaries land between words by construction.
+- **Segmentation:** NEVER chop at fixed times (causes mid-word cuts). Default (s2) uses
+ VAD/silence detection and cuts only at silences ≥300ms, packing speech into ~22–28s
+ windows. Boundaries land between words by construction. **v2 (s2b, opt-in per channel via
+ `diarized: true`):** run the Sarvam **Batch API with diarization** on the full recording,
+ keep only the DOMINANT speaker's phrase chunks, and pack contiguous chunks — clean phrase
+ boundaries + single-speaker guaranteed (best for interview/podcast sources). Batch gives
+ chunk-level, not word-level, timestamps.
+- **Multiple speakers in one clip:** single-speaker per clip is required. Cheap guard (s3):
+ inaSpeechSegmenter gender detection — if BOTH male & female speech each exceed
+ `multispeaker_min_fraction`, reject `multi_speaker`. Strong guarantee: the s2b diarized
+ path. True simultaneous overlap is unrepairable → reject, never separate.
+- **Mixed-gender / 2-person podcast or interview:** set `diarized: true` on that channel.
+ s2b keeps only the DOMINANT speaker (most total speech time) and drops the guest's turns, so
+ the dataset stays single-speaker — we do NOT attempt source separation. Leave the channel
+ `gender: unknown`; s3 detects gender per surviving clip (`gender_detected`) and s6 uses that
+ to bin pitch, so you needn't know the dominant speaker up front. The cheap s3 guard is the
+ fallback if you forget to set `diarized: true` (it just rejects the mixed clips).
+- **Code-switching / two languages at once:** distinguish two cases. (1) *Same speaker mixes
+ languages* (e.g. Telugu sentence with English words — extremely common in Indian
+ podcasts): this is fine. `saaras:v3` handles code-switching; we pass the channel's DOMINANT
+ `language_code` (`te-IN`/`en-IN`) and tag the clip with that language. (2) *Two different
+ people each speaking a different language simultaneously*: that's just overlapping speech —
+ unrepairable like a music bed. The s3 multi-speaker guard / s2b dominant-speaker selection
+ already handle it (reject the overlap, or keep only the dominant voice). We never try to
+ split two overlapping voices apart. If a source is so heavily bilingual that the dominant
+ language is unclear, set `language: unknown` to let Saaras auto-detect (lower accuracy — a
+ last resort, not the default).
+- **Crowd noise / applause / laughter (e.g. standup):** great for emotion diversity but the
+ crowd overlapping the voice is unrepairable like a music bed, and it's labeled `noise`
+ (NOT `music`) by inaSpeechSegmenter. s3 rejects clips whose `noise` fraction exceeds
+ `noise_overlap_reject_threshold` (`rejected_reason="crowd_noise"`); survivors get
+ `recording_quality` downgraded. Prefer solo/studio sources for emotional range.
 - **Background music:** DETECT AND DROP, never repair. Source separation (Demucs) degrades
   audio and TTS needs clean recordings, so a repaired clip is worse than none. Use
   `inaSpeechSegmenter` to label speech/music/noise; if music overlaps **>10%** of a clip,
