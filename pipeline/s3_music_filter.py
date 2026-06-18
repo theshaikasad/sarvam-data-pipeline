@@ -23,11 +23,17 @@ Resumable: only rows still at stage "segmented" are processed.
 from __future__ import annotations
 
 import os
-import sys
 
-import yaml
+# inaSpeechSegmenter ships Keras-2-era CNN models that crash under Keras 3 (TF >= 2.16
+# changed input-rank handling). Route `tensorflow.keras` through the tf-keras (Keras 2)
+# compat shim. MUST be set before tensorflow is imported, so it lives at module top.
+os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 
-import state
+import sys  # noqa: E402
+
+import yaml  # noqa: E402
+
+import state  # noqa: E402
 
 CONFIG_PATH = "config.yaml"
 
@@ -35,6 +41,33 @@ CONFIG_PATH = "config.yaml"
 def load_config(path: str = CONFIG_PATH) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def _patch_pyannote_viterbi() -> None:
+    """Compat shim for the old `pyannote.algorithms` bundled with inaSpeechSegmenter.
+
+    Its viterbi `_update_emission`/`_update_constraint` call `np.vstack(<generator>)`, which
+    NumPy >= 1.24 rejects ("arrays to stack must be passed as a sequence"). We rebind those
+    two module-level functions to list-based versions so inaSpeechSegmenter works on modern
+    NumPy. Lives here (not in site-packages) so the fix travels with the repo.
+    """
+    try:
+        import numpy as np
+        import six
+        from pyannote.algorithms.utils import viterbi as _vit
+    except Exception:  # noqa: BLE001 - if pyannote isn't importable, let s3 fail loudly later
+        return
+
+    def _update_emission(emission, consecutive):
+        return np.vstack([np.tile(e, (c, 1))
+                          for e, c in six.moves.zip(emission.T, consecutive)]).T
+
+    def _update_constraint(constraint, consecutive):
+        return np.vstack([np.tile(e, (c, 1))
+                          for e, c in six.moves.zip(constraint.T, consecutive)]).T
+
+    _vit._update_emission = _update_emission
+    _vit._update_constraint = _update_constraint
 
 
 def label_fractions(segmentation, clip_duration: float) -> dict:
@@ -53,6 +86,12 @@ def run(config_path: str = CONFIG_PATH) -> None:
     music_thr = float(cfg["music_overlap_reject_threshold"])
     noise_thr = float(cfg.get("noise_overlap_reject_threshold", 1.0))
     spk_min = float(cfg.get("multispeaker_min_fraction", 1.0))
+    # Channels the curator has LISTENED to and verified as single-speaker. The cheap
+    # gender-based multi-speaker guard misfires on expressive solo voices (e.g. a storyteller
+    # whose pitch modulation the binary gender CNN reads as a second, "female" speaker), so we
+    # skip that rejection for solo channels — music/noise checks still apply. Human ground
+    # truth beats a noisy heuristic.
+    solo_channels = {c["name"] for c in cfg["channels"] if c.get("solo")}
     rows = state.load(cfg["paths"]["manifest"])
 
     pending = list(state.by_stage(rows, "segmented"))
@@ -62,6 +101,7 @@ def run(config_path: str = CONFIG_PATH) -> None:
 
     # Import + init the segmenter once (heavy: loads TF models). detect_gender=True so we
     # can both label speaker gender and catch mixed-gender (multi-speaker) clips.
+    _patch_pyannote_viterbi()
     from inaSpeechSegmenter import Segmenter
     seg = Segmenter(vad_engine="smn", detect_gender=True)
 
@@ -84,7 +124,9 @@ def run(config_path: str = CONFIG_PATH) -> None:
         noise = frac.get("noise", 0.0)
         male = frac.get("male", 0.0)
         female = frac.get("female", 0.0)
-        multi = male >= spk_min and female >= spk_min
+        # Solo channels opt out of the (noisy) gender-based multi-speaker rejection.
+        multi = (male >= spk_min and female >= spk_min
+                 and row.get("source_channel") not in solo_channels)
         gender_detected = ("male" if male >= female else "female") if (male or female) else "unknown"
 
         common = dict(

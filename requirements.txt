@@ -2,6 +2,7 @@ yt-dlp
 ffmpeg-python
 pydub
 inaSpeechSegmenter
+tf-keras            # Keras-2 compat for inaSpeechSegmenter under TF>=2.16 (see s3)
 librosa
 numpy
 soundfile

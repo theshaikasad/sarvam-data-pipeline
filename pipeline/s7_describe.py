@@ -48,11 +48,17 @@ def describe_one(client, model, row):
         variation=row.get("pitch_variation", "moderate"),
         quality=row.get("recording_quality", "clean"),
     )
+    # sarvam-30b is a reasoning model — reasoning_effort=None (explicit JSON null) disables
+    # thinking so the sentence comes straight back in content instead of an empty content with
+    # a 4096-token reasoning trace. See Sarvam docs: adjust-the-models-thinking-level.
     resp = client.chat.completions.create(
-        model=model, temperature=0.4,
+        model=model, temperature=0.4, max_tokens=300,
         messages=[{"role": "user", "content": prompt}],
+        extra_body={"reasoning_effort": None},
     )
-    return resp.choices[0].message.content.strip().strip('"')
+    msg = resp.choices[0].message
+    content = msg.content or getattr(msg, "reasoning_content", "") or ""
+    return content.strip().strip('"')
 
 
 def load_env() -> None:

@@ -137,11 +137,16 @@ def segment_raw(raw_path, cfg, channels, rows, key) -> int:
     target_ms = int(cfg["target_clip_seconds"] * 1000)
     min_ms = int(cfg["min_clip_seconds"] * 1000)
     max_ms = int(cfg["max_clip_seconds"] * 1000)
+    # A little breathing room so clips don't start/end flush on a word onset. Kept small so
+    # it stays inside the inter-turn pause and doesn't pull in the other speaker's voice.
+    pad_ms = int(cfg.get("clip_pad_ms", 0))
 
     count = 0
     for start_ms, end_ms, transcript in pack_entries(entries, speaker, target_ms, min_ms, max_ms):
         clip_id = f"{channel}_{videoid}_{count:03d}"
-        audio[start_ms:end_ms].export(os.path.join(clips_dir, f"{clip_id}.wav"), format="wav")
+        ps = max(0, start_ms - pad_ms)
+        pe = min(len(audio), end_ms + pad_ms)
+        audio[ps:pe].export(os.path.join(clips_dir, f"{clip_id}.wav"), format="wav")
         state.update(
             rows, clip_id,
             source_url=f"https://youtu.be/{videoid}",
@@ -149,9 +154,9 @@ def segment_raw(raw_path, cfg, channels, rows, key) -> int:
             source_type=ch_cfg["source_type"],
             language=ch_cfg["language"],
             gender=ch_cfg.get("gender", "unknown"),
-            start_time=round(start_ms / 1000.0, 3),
-            end_time=round(end_ms / 1000.0, 3),
-            duration=round((end_ms - start_ms) / 1000.0, 3),
+            start_time=round(ps / 1000.0, 3),
+            end_time=round(pe / 1000.0, 3),
+            duration=round((pe - ps) / 1000.0, 3),
             speaker_id=str(speaker),
             segmentation="diarized_v2",
             stage="segmented",

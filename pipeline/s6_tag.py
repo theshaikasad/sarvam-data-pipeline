@@ -117,11 +117,19 @@ def tag_one(client, model, row, emotions, styles):
         pitch=row.get("pitch_mean"), pitch_bin=row.get("pitch_bin"),
         variation=row.get("pitch_variation"), quality=row.get("recording_quality"),
     )
+    # sarvam-30b is a REASONING model: by default it spends its whole token budget on hidden
+    # chain-of-thought (>4096 tokens, which exceeds the starter-tier cap) and returns
+    # content=None. `reasoning_effort=None` (an explicit JSON null, NOT the string "none")
+    # disables thinking, giving a direct JSON answer in ~70 tokens / ~0.5s. See Sarvam docs:
+    # adjust-the-models-thinking-level.
     resp = client.chat.completions.create(
-        model=model, temperature=0.2,
+        model=model, temperature=0.2, max_tokens=512,
         messages=[{"role": "user", "content": prompt}],
+        extra_body={"reasoning_effort": None},
     )
-    data = parse_json(resp.choices[0].message.content)
+    msg = resp.choices[0].message
+    content = msg.content or getattr(msg, "reasoning_content", "") or ""
+    data = parse_json(content)
     emotion = data.get("emotion") if data.get("emotion") in emotions else "neutral"
     style = data.get("style") if data.get("style") in styles else "narrative"
     return {

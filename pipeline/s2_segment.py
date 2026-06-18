@@ -101,12 +101,17 @@ def segment_raw(raw_path: str, cfg: dict, channels: dict, rows: dict) -> int:
     target_ms = int(cfg["target_clip_seconds"] * 1000)
     min_ms = int(cfg["min_clip_seconds"] * 1000)
     max_ms = int(cfg["max_clip_seconds"] * 1000)
+    # A little breathing room so clips don't start/end flush on a word onset; pulled from the
+    # surrounding silence (boundaries are at >= min_silence_ms gaps, so this stays in silence).
+    pad_ms = int(cfg.get("clip_pad_ms", 0))
 
     count = 0
     for start_ms, end_ms in pack_spans(spans, target_ms, min_ms, max_ms):
         clip_id = f"{channel}_{videoid}_{count:03d}"
         clip_path = os.path.join(clips_dir, f"{clip_id}.wav")
-        audio[start_ms:end_ms].export(clip_path, format="wav")
+        ps = max(0, start_ms - pad_ms)
+        pe = min(len(audio), end_ms + pad_ms)
+        audio[ps:pe].export(clip_path, format="wav")
         state.update(
             rows, clip_id,
             source_url=f"https://youtu.be/{videoid}",
@@ -114,9 +119,9 @@ def segment_raw(raw_path: str, cfg: dict, channels: dict, rows: dict) -> int:
             source_type=ch_cfg["source_type"],
             language=ch_cfg["language"],
             gender=ch_cfg.get("gender", "unknown"),
-            start_time=round(start_ms / 1000.0, 3),
-            end_time=round(end_ms / 1000.0, 3),
-            duration=round((end_ms - start_ms) / 1000.0, 3),
+            start_time=round(ps / 1000.0, 3),
+            end_time=round(pe / 1000.0, 3),
+            duration=round((pe - ps) / 1000.0, 3),
             stage="segmented",
         )
         count += 1

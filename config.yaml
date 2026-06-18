@@ -23,6 +23,11 @@
 # Roster note: the real URLs below are mostly male -> point the empty XXXX slots at FEMALE
 # speakers to avoid a 100%-male dataset.
 
+# `solo: true` = "I have LISTENED and verified this source is a single speaker." It makes s3
+# SKIP the cheap gender-based multi-speaker rejection (which misfires badly on expressive
+# solo voices — a storyteller's pitch swings get mislabeled as a second 'female' speaker).
+# Music/noise checks still run. Use `diarized: true` instead (not solo) for a genuine
+# multi-speaker source (interview/2-host podcast) to keep only the dominant speaker.
 channels:
   # --- Telugu (~30 min target) ---
   - name: Harshaneeyam
@@ -30,30 +35,35 @@ channels:
     language: te-IN
     source_type: podcast_storytelling
     gender: male
+    solo: true          # verified single-speaker storyteller
     max_videos: 5
   - name: BV_Pattabhiram
     url_or_playlist: "https://youtu.be/JbHWzr8Sib0"        # placeholder, edit me
     language: te-IN
     source_type: public_lecture
     gender: male
+    solo: true
     max_videos: 5
   - name: Garikapati
     url_or_playlist: "https://youtu.be/bVbXU7fq0ak"        # placeholder, edit me
     language: te-IN
     source_type: public_lecture
     gender: male
+    solo: true
     max_videos: 5
   - name: Te_Comedy
     url_or_playlist: "https://youtu.be/XXXX"               # solo comedy/light -> happy/playful
     language: te-IN
     source_type: podcast_independent
     gender: female      # pick a FEMALE speaker here to balance the male-heavy roster
+    solo: true          # only if it's a SOLO set; for a 2-person podcast use `diarized: true`
     max_videos: 5
   - name: Te_Devotional
     url_or_playlist: "https://youtu.be/XXXX"               # devotional/calm narration -> calm
     language: te-IN
     source_type: public_lecture
     gender: female      # pick a FEMALE speaker here to balance the male-heavy roster
+    solo: true
     max_videos: 5
 
   # --- Indian English (~30 min target) ---
@@ -62,30 +72,42 @@ channels:
     language: en-IN
     source_type: public_lecture
     gender: unknown     # SET ME after picking the talk (TED speakers vary)
+    solo: true          # TED talks are single-speaker
     max_videos: 5
   - name: EN_Audiobook
+    # TWO female narrators. gender:female is correct for both (same pitch range / column).
+    # But 2 speakers => not single-speaker: the gender guard can't split two same-gender
+    # voices, so to GUARANTEE one speaker per clip use diarized:true (keeps the dominant
+    # narrator). Leave solo:true only if you've verified clips don't mix the two narrators.
     url_or_playlist: "https://youtu.be/nIWdyT7IXzc"        # placeholder, edit me
     language: en-IN
     source_type: audiobook
-    gender: unknown     # SET ME to the narrator's gender
+    gender: female
+    solo: true          # <- switch to `diarized: true` (remove solo) for a hard 1-speaker guarantee
     max_videos: 5
   - name: EN_Podcast_Solo
     url_or_playlist: "https://youtu.be/9lGoZDUCVWI"        # placeholder, edit me
     language: en-IN
     source_type: podcast_independent
     gender: male
+    solo: true
     max_videos: 5
   - name: En_Motivational
     url_or_playlist: "https://youtu.be/XXXX"               # motivational speech -> excited/angry
     language: en-IN
     source_type: public_lecture
     gender: female      # pick a FEMALE speaker here to balance the male-heavy roster
+    solo: true
     max_videos: 5
   - name: En_Comedy
-    url_or_playlist: "https://youtu.be/XXXX"               # solo standup/comedy -> happy/playful
+    # "A Moment of Silence" comedy podcast Ep.107 (1h10m) — MULTI-HOST, female-led. Not solo,
+    # so diarized:true -> s2b runs Sarvam Batch diarization and keeps only the DOMINANT
+    # speaker (whoever talks most across the episode), giving single-speaker clips.
+    url_or_playlist: "https://youtu.be/DV1zxu47_mA"        # multi-host comedy podcast
     language: en-IN
     source_type: podcast_independent
-    gender: female      # pick a FEMALE speaker here to balance the male-heavy roster
+    gender: female      # female-led, to balance the male-heavy roster
+    diarized: true      # multi-speaker -> keep dominant speaker only (s2b, not s2)
     max_videos: 5
 
 # --- Segmentation / clip sizing (stay safely under Saaras sync 30s limit) ---
@@ -102,6 +124,9 @@ min_clip_seconds: 18
 max_clip_seconds: 28
 min_silence_ms: 300
 silence_thresh_db: -38
+clip_pad_ms: 120        # small lead-in/out (ms) added at each clip edge from surrounding
+                        # silence, so clips don't start/end flush on a word onset (s2 & s2b).
+                        # Existing clips are not re-cut; this applies to newly segmented ones.
 
 # --- Music / noise / multi-speaker filter (s3) ---
 music_overlap_reject_threshold: 0.10   # reject clip if music overlaps >10%
