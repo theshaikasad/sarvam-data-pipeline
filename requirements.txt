@@ -1,0 +1,16 @@
+yt-dlp
+ffmpeg-python
+pydub
+inaSpeechSegmenter
+librosa
+numpy
+soundfile
+jiwer
+matplotlib
+openai
+requests
+datasets
+huggingface_hub
+gradio
+pyyaml
+tqdm

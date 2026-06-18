@@ -1,0 +1,82 @@
+# sarvam-tts-dataset config — see CLAUDE.md for the contract.
+# Fill in real URLs after listening to ~3 min of each channel (swap if music bed /
+# multi-speaker / bad mic). url_or_playlist may be a single video or a playlist URL.
+
+channels:
+  # --- Telugu (~30 min target) ---
+  - name: Harshaneeyam
+    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    language: te-IN
+    source_type: podcast_storytelling
+    max_videos: 5
+  - name: BV_Pattabhiram
+    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    language: te-IN
+    source_type: public_lecture
+    max_videos: 5
+  - name: Garikapati
+    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    language: te-IN
+    source_type: public_lecture
+    max_videos: 5
+
+  # --- Indian English (~30 min target) ---
+  - name: TED_India
+    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    language: en-IN
+    source_type: public_lecture
+    max_videos: 5
+  - name: EN_Audiobook
+    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    language: en-IN
+    source_type: audiobook
+    max_videos: 5
+  - name: EN_Podcast_Solo
+    url_or_playlist: "https://youtu.be/XXXX"        # placeholder, edit me
+    language: en-IN
+    source_type: podcast_independent
+    max_videos: 5
+
+# --- Segmentation / clip sizing (stay safely under Saaras sync 30s limit) ---
+target_clip_seconds: 25
+min_clip_seconds: 18
+max_clip_seconds: 28
+min_silence_ms: 300
+silence_thresh_db: -38
+
+# --- Music filter ---
+music_overlap_reject_threshold: 0.10   # reject clip if music overlaps >10%
+
+# --- Audio format ---
+sample_rate: 16000
+target_lufs: -23
+
+# --- ASR / LLM ---
+asr:
+  model: "saaras:v3"
+  mode: "transcribe"
+  endpoint: "https://api.sarvam.ai/speech-to-text"
+llm:
+  model: "sarvam-30b"
+  base_url: "https://api.sarvam.ai/v1"
+
+# --- Taxonomy (Parler-aligned; see CLAUDE.md) ---
+taxonomy:
+  emotion: [neutral, happy, sad, angry, excited, calm, fearful, surprised, serious, playful]
+  style:   [narrative, conversational, oratorical, instructional, devotional, dramatic]
+  speaking_rate_bin: [very_slow, slow, measured, fast, very_fast]
+  pitch_bin: [low, moderate, high]            # per-gender
+  pitch_variation: [monotone, moderate, animated]
+  recording_quality: [clean, slight_noise, noisy]
+
+# --- HuggingFace export (s8) ---
+# repo_id is namespace/name; override at runtime with the HF_REPO_ID env var.
+hf:
+  repo_id: "your-hf-username/sarvam-tts-dataset"   # edit me before running s8
+  private: false                                   # CLAUDE.md requires a PUBLIC dataset
+
+# --- Paths ---
+paths:
+  raw: data/raw
+  clips: data/clips
+  manifest: data/manifest.jsonl

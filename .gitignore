@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Large data artifacts (manifest.jsonl IS tracked; audio is not)
+data/raw/
+data/clips/
+
+# Audio files
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.opus
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
