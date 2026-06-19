@@ -112,11 +112,11 @@ channels:
 
   # --- Diversity batch (added to fight narrative/calm skew + raise female share) ---
   - name: En_Podcast_Raj
-    url_or_playlist: "https://youtu.be/7HXGdq3MXBw"        # Raj Shamani (male) podcast w/ a guest
-    language: en-IN
+    url_or_playlist: "https://youtu.be/7HXGdq3MXBw"        # Telugu podcast (male) w/ a guest.
+    language: te-IN     # CORRECTED: this video is Telugu (heavy English code-switching), not
+                        #   English. en-IN forced Saaras to romanize it; te-IN -> Telugu script.
     source_type: podcast_independent
-    gender: male        # Raj Shamani is male; diarize keeps the dominant speaker -> if a guest
-                        #   ends up dominant, s3 gender_detected reveals it and we patch.
+    gender: female      # CORRECTED: the dominant speaker in this Telugu podcast is female.
     diarized: true      # 2 speakers -> keep dominant only (single-speaker clips)
     max_videos: 1
   - name: En_Speech

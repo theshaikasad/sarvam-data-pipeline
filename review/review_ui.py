@@ -99,6 +99,19 @@ def lang_stats(lang: str) -> tuple[int, int, int]:
     return done, len(clips) - done, len(clips)
 
 
+def gold_stats(lang: str) -> tuple[int, int, int]:
+    """(verified, left, total) over the curated GOLD set (gold_candidate) for this language.
+
+    This is the small set that actually needs reviewing for WER/CER — distinct from the
+    whole-language counts above, so the bar can't make 9 gold clips look like 90.
+    """
+    gold = [r for r in rows.values()
+            if r.get("language") == lang and r.get("gold_candidate")
+            and r.get("stage") != "rejected"]
+    verified = sum(1 for r in gold if r.get("human_verified"))
+    return verified, len(gold) - verified, len(gold)
+
+
 def palette_choices(plist: list[str]) -> list[tuple[str, int]]:
     """Online-test-style chips: each clip's number + status, value = its position."""
     out = []
@@ -112,8 +125,11 @@ def palette_choices(plist: list[str]) -> list[tuple[str, int]]:
 
 def render(plist: list[str], idx: int, lang: str):
     done, left, total_lang = lang_stats(lang)
+    g_done, g_left, g_total = gold_stats(lang)
     bar = (f"### ✅ {done} అయినవి (done)  ·  ⬜ {left} మిగిలినవి (left)  ·  "
-           f"{total_lang} మొత్తం — {LANG_NAME.get(lang, lang)}")
+           f"{total_lang} మొత్తం — {LANG_NAME.get(lang, lang)}\n"
+           f"#### ⭐ Gold set: {g_done}/{g_total} verified  ·  {g_left} left to review "
+           f"(this is all you need for WER/CER)")
     if not plist:
         return (None, "", EMOTIONS[0], STYLES[0], False,
                 bar + "\n\n*ఈ జాబితా ఖాళీ · nothing here*",

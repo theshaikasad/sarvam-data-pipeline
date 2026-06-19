@@ -19,15 +19,15 @@ size_categories:
 ---
 # Sarvam-style TTS Training Dataset
 
-A small, high-curation single-speaker-per-clip TTS dataset (~59 minutes,
-140 clips) of **Telugu** and **Indian English** speech, each clip annotated with an
+A small, high-curation single-speaker-per-clip TTS dataset (~80 minutes,
+193 clips) of **Telugu** and **Indian English** speech, each clip annotated with an
 accurate transcript and a rich, Parler-TTS-style natural-language **style/emotion
 description**. Built as a take-home; the emphasis is **data quality and curation
 judgment**, not pipeline code.
 
-- **Clips:** 140 (~25s each, always cut at silence so no word is ever clipped)
-- **Total audio:** 58.6 min
-- **Gold (human-verified) subset:** 6 clips (`split="gold"`)
+- **Clips:** 193 (~25s each, always cut at silence so no word is ever clipped)
+- **Total audio:** 80.2 min
+- **Gold (human-verified) subset:** 23 clips (`split="gold"`)
 - **Audio:** 16kHz mono WAV, loudness-normalized
 - **Repo:** `your-hf-username/sarvam-tts-dataset`
 - **Generated:** 2026-06-19
@@ -39,28 +39,28 @@ stable `spk_*` id per source channel.
 
 | channel | speaker_id | language | source_type | clips | minutes |
 | --- | --- | --- | --- | --- | --- |
-| BV_Pattabhiram | spk_bv_pattabhiram | Telugu | public_lecture | 14 | 6.1 |
-| EN_Audiobook | spk_en_audiobook | Indian English | audiobook | 8 | 3.4 |
-| EN_Podcast_Solo | spk_en_podcast_solo | Indian English | podcast_independent | 8 | 3.4 |
-| En_Comedy | spk_en_comedy | Indian English | podcast_independent | 9 | 3.5 |
-| En_Podcast_Raj | spk_en_podcast_raj | Indian English | podcast_independent | 9 | 3.6 |
-| En_Speech | spk_en_speech | Indian English | public_lecture | 9 | 3.7 |
-| En_Standup_F1 | spk_en_standup_f1 | Indian English | standup_comedy | 9 | 3.4 |
-| En_Standup_F2 | spk_en_standup_f2 | Indian English | standup_comedy | 9 | 3.7 |
-| En_Standup_F3 | spk_en_standup_f3 | Indian English | standup_comedy | 9 | 3.8 |
-| Garikapati | spk_garikapati | Telugu | public_lecture | 15 | 6.2 |
-| Harshaneeyam | spk_harshaneeyam | Telugu | podcast_storytelling | 14 | 6.2 |
-| TED_India | spk_ted_india | Indian English | public_lecture | 8 | 3.5 |
+| BV_Pattabhiram | spk_bv_pattabhiram | Telugu | public_lecture | 23 | 9.9 |
+| EN_Audiobook | spk_en_audiobook | Indian English | audiobook | 13 | 5.5 |
+| EN_Podcast_Solo | spk_en_podcast_solo | Indian English | podcast_independent | 13 | 5.6 |
+| En_Comedy | spk_en_comedy | Indian English | podcast_independent | 13 | 5.1 |
+| En_Podcast_Raj | spk_en_podcast_raj | Telugu | podcast_independent | 17 | 6.4 |
+| En_Speech | spk_en_speech | Indian English | public_lecture | 16 | 6.8 |
+| En_Standup_F1 | spk_en_standup_f1 | Indian English | standup_comedy | 12 | 4.7 |
+| En_Standup_F2 | spk_en_standup_f2 | Indian English | standup_comedy | 10 | 4.0 |
+| En_Standup_F3 | spk_en_standup_f3 | Indian English | standup_comedy | 10 | 4.1 |
+| Garikapati | spk_garikapati | Telugu | public_lecture | 17 | 7.1 |
+| Harshaneeyam | spk_harshaneeyam | Telugu | podcast_storytelling | 17 | 7.4 |
+| TED_India | spk_ted_india | Indian English | public_lecture | 10 | 4.3 |
 | Te_ASMR | spk_te_asmr | Telugu | asmr | 5 | 2.1 |
-| Te_Standup_M | spk_te_standup_m | Telugu | standup_comedy | 14 | 6.1 |
+| Te_Standup_M | spk_te_standup_m | Telugu | standup_comedy | 17 | 7.2 |
 
 ## Minutes per language
 
 | language | clips | minutes |
 | --- | --- | --- |
-| Indian English | 78 | 32.0 |
-| Telugu | 62 | 26.7 |
-| **TOTAL** | 140 | 58.6 |
+| Indian English | 97 | 40.1 |
+| Telugu | 96 | 40.2 |
+| **TOTAL** | 193 | 80.2 |
 
 ## Label distributions
 
@@ -68,36 +68,38 @@ Emotion (`final_emotion = human_emotion or llm_emotion`):
 
 | emotion | clips |
 | --- | --- |
-| neutral | 44 |
-| excited | 22 |
-| sad | 19 |
-| serious | 16 |
-| playful | 13 |
-| happy | 11 |
-| angry | 11 |
-| calm | 3 |
-| surprised | 1 |
+| neutral | 61 |
+| sad | 28 |
+| excited | 26 |
+| serious | 24 |
+| playful | 15 |
+| angry | 13 |
+| happy | 13 |
+| calm | 9 |
+| surprised | 3 |
+| fearful | 1 |
 
 ### Emotion cross-check (text LLM vs audio model)
 
-The text LLM emotion and the audio model's emotion agree (same valence/arousal quadrant) on **26/140 (19%)** of clips with both opinions. Disagreements were prioritised for human review; the `gold` split therefore over-samples the hard cases. Per-clip dimensional scores ship as `audio_arousal`, `audio_valence`, `audio_dominance`.
+The text LLM emotion and the audio model's emotion agree (same valence/arousal quadrant) on **33/193 (17%)** of clips with both opinions. Disagreements were prioritised for human review; the `gold` split therefore over-samples the hard cases. Per-clip dimensional scores ship as `audio_arousal`, `audio_valence`, `audio_dominance`.
 
 Style (`final_style = human_style or llm_style`):
 
 | style | clips |
 | --- | --- |
-| narrative | 83 |
-| conversational | 50 |
-| dramatic | 4 |
-| oratorical | 3 |
+| narrative | 123 |
+| conversational | 60 |
+| oratorical | 7 |
+| dramatic | 2 |
+| instructional | 1 |
 
 Speaker gender (one speaker per source; reported honestly — see limitations):
 
 | gender | clips | minutes |
 | --- | --- | --- |
-| male | 82 | 35.0 |
-| female | 49 | 19.9 |
-| unknown | 9 | 3.7 |
+| male | 97 | 41.6 |
+| female | 80 | 31.9 |
+| unknown | 16 | 6.8 |
 
 ## Transcription quality (WER / CER)
 

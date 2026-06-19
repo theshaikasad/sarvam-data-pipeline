@@ -52,22 +52,42 @@ def run(target_minutes: float = 60.0, seed: int = 42, config_path: str = CONFIG_
         by_src: dict[str, list[dict]] = collections.defaultdict(list)
         for r in clips:
             by_src[r.get("source_channel", "?")].append(r)
-        per_src_sec = per_lang_sec / max(1, len(by_src))
-        for src, sclips in by_src.items():
+
+        # Always keep reviewed clips, then fill toward the language budget by ROUND-ROBIN
+        # across sources. Round-robin keeps sources balanced AND redistributes any budget a
+        # small source (e.g. a 2-min ASMR channel) can't absorb to the other sources, so the
+        # language reliably reaches its target instead of undershooting.
+        sec = 0.0
+        queues: dict[str, collections.deque] = {}
+        for src in sorted(by_src):
+            sclips = by_src[src]
             verified = [r for r in sclips if r.get("human_verified")]
             others = [r for r in sclips if not r.get("human_verified")]
             rng.shuffle(others)
-            sec = 0.0
-            for r in verified:                      # always keep reviewed clips
+            for r in verified:                      # never throw away reviewed work
                 keep.add(r["clip_id"]); sec += float(r.get("duration", 0))
-            for r in others:                        # fill the rest of the budget
-                if sec >= per_src_sec:
-                    break
-                keep.add(r["clip_id"]); sec += float(r.get("duration", 0))
+            queues[src] = collections.deque(others)
 
+        while sec < per_lang_sec:
+            progressed = False
+            for src in sorted(queues):
+                if sec >= per_lang_sec:
+                    break
+                q = queues[src]
+                if q:
+                    r = q.popleft()
+                    keep.add(r["clip_id"]); sec += float(r.get("duration", 0))
+                    progressed = True
+            if not progressed:                       # whole language pool exhausted
+                break
+
+    # Normalize: kept rows -> "described" (the pre-export stage) so a fresh s8 rebuilds the
+    # complete set; everything else in the pool becomes a recoverable balance_trim reject.
     ntrim = 0
     for r in pool:
-        if r["clip_id"] not in keep:
+        if r["clip_id"] in keep:
+            state.update(rows, r["clip_id"], stage="described", rejected_reason=None)
+        else:
             state.update(rows, r["clip_id"], stage="rejected", rejected_reason="balance_trim")
             ntrim += 1
     state.save(rows, manifest)

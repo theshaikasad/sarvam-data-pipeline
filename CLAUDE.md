@@ -188,9 +188,17 @@ slice usable as a **quality anchor**.
 - Report the **worst ASR failures** with examples.
 
 ## As-built status (final)
-- **Dataset:** 140 clips / 58.6 min, balanced across **14 sources** (9 Indian English ~32 min,
-  5 Telugu ~27 min). 617 clips collected -> dropped 60 music_bed + 79 crowd_noise + 2 manual
-  + 336 balance_trim. Gender: male 35 min / female 20 min / unknown 3.7. Whisper: 5 (ASMR).
+- **Dataset:** currently a **193-clip / 80.2-min over-collected review buffer** (8 Indian
+ English ~40 min, 6 Telugu ~40 min) so clips can be rejected during review and still clear
+ the >=30 min per-language floor; re-run `pipeline/balance.py <min>` to cull to final after
+ review. 617 clips collected -> dropped 60 music_bed + 79 crowd_noise + 10 manual + 275
+ balance_trim. Gender: male 42 min / female 32 min (40%) / unknown 6.8. Whisper: 5 (ASMR).
+ 23 gold (human-verified).
+ - **`En_Podcast_Raj` is Telugu + female, not English + male** — caught during review: it's a
+   Telugu podcast with heavy English code-switching that was configured `en-IN`/`male`, so
+   Saaras romanized it instead of writing Telugu script. Relabeled `te-IN`/`female` and re-ran
+   s5->s6->s7 (clip_ids keep their original `En_Podcast_Raj_*` prefix since clip_id is
+   immutable). Re-binned pitch per-gender; lifted the female share 34% -> 42%.
 - **Per-channel config flags that emerged** (set on a channel block in config.yaml):
   - `solo: true` — verified single-speaker; s3 skips the noisy gender multi-speaker guard.
   - `diarized: true` — multi-speaker source; s2b keeps only the dominant speaker (s2 skips it).
@@ -200,8 +208,12 @@ slice usable as a **quality anchor**.
 - **New segmentation knobs:** `clip_pad_ms` (lead-in/out from surrounding silence so clips
   don't start flush on a word onset) and `clip_max_gap_ms` (close a clip on long internal
   silence — needed for ASMR dead air).
-- **`pipeline/balance.py [min]`** — over-collect then cull to a balanced N-minute set (even
-  across languages and sources, keeps human_verified clips, marks the rest `balance_trim`).
+- **`pipeline/balance.py [min]`** — over-collect then cull to a balanced N-minute set. Splits
+ the target evenly across languages, then fills each language by **round-robin across its
+ sources** so a small source (e.g. the 2-min ASMR channel) can't strand budget — leftover is
+ redistributed to the other sources, so each language reliably reaches its share (>=30 min).
+ Keeps human_verified clips, normalizes kept rows to `described` (re-export-safe), marks the
+ rest `balance_trim`.
 - **`eval/snapshot.py`** — text corpus report at any stage. **`s8` shuffles** rows on export.
 - **Known limitation:** English ASMR is whispered below the −38 dB silence threshold, so VAD
   reads it as silence (0 clips). Fix = per-channel lower `silence_thresh_db`.
