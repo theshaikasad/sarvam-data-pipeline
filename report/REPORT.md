@@ -163,7 +163,8 @@ The final set, by the numbers:
 - **Shorter clips** (say 8-12 seconds). Smaller windows span fewer speaker turns, so there's far less chance of two voices landing in one clip — the main risk with podcasts.
 - **Per-source silence settings** so quiet ASMR segments properly (this would recover the English ASMR I lost).
 - **A multilingual emotion model** that actually knows Indian languages, so the audio and text emotion opinions agree more often.
-- **More female Telugu sources, more genres, and a YouTube scraper** to scale past a hand-picked roster — plus a fuller human-review pass for a larger trusted set.
+- **More human review.** The 0.0% WER/CER is real but flattering — it reflects reviewers *accepting* Sarvam's transcripts verbatim, not a blind re-transcription. With more time I'd (a) review many more clips, and (b) have a few re-typed from scratch without seeing the ASR, so the number becomes a trustworthy *error* rate instead of an *approval* rate.
+- **More female Telugu sources, more genres, and a YouTube scraper** to scale past a hand-picked roster.
 
 # Ethics and licensing
 

@@ -265,7 +265,7 @@ taxonomy:
 # --- HuggingFace export (s8) ---
 # repo_id is namespace/name; override at runtime with the HF_REPO_ID env var.
 hf:
-  repo_id: "your-hf-username/sarvam-tts-dataset"   # edit me before running s8
+  repo_id: "theshaikasad/sarvam-tts-dataset"       # edit me before running s8
   private: false                                   # CLAUDE.md requires a PUBLIC dataset
 
 # --- Paths ---
