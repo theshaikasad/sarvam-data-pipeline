@@ -18,6 +18,22 @@ s1 download  -> s2/s2b segment -> s3 filter -> s4/s4b features+emotion
 
 Sarvam APIs do the speech-to-text (`saaras:v3`), diarization (Batch STT), and all LLM tagging/description (`sarvam-30b`). A hard **no-overwrite rule** keeps machine columns (`asr_*`, `llm_*`) and human columns (`human_*`) separate; they're merged only at export, and human-verified clips form the `gold` split.
 
+## Reviewing the data (the Gradio app)
+
+"Listen to the data" is the core of the task, so `review/review_ui.py` is a small **Gradio** app built so a *non-technical* reviewer can do it — my **Telugu-reading grandmother verified the Telugu clips**, which is far better ground truth than me (I don't read Telugu). Per clip you: play it, fix the transcript if a word is wrong, tap how it *sounds* (emoji emotion/style, so nothing needs reading in English), and **Save** — or **Reject** a bad clip.
+
+It opens on a small, **source-balanced review set** (chosen by `review/gold_sample.py`, prioritising the clips where the text-LLM and the audio model disagree on emotion), so you check a high-value handful, not all 190. There's a Telugu/English toggle, a done/left progress bar, and a "jump to any clip" palette. It only ever writes `human_*` fields — the machine's output is never touched.
+
+<p align="center">
+  <img src="report/figures/review_ui.png" width="78%" alt="Review UI: play, edit transcript, emotion/style, Save/Reject/Back/Next"><br>
+  <em>The review screen — play, confirm or fix the transcript, tap the feeling, Save or Reject.</em>
+</p>
+
+<p align="center">
+  <img src="report/figures/review_ui_full.png" width="78%" alt="Bilingual review UI with Telugu labels and emoji emotion buttons"><br>
+  <em>The bilingual version built for a non-technical Telugu reader — Telugu labels, big text, emoji emotion, and a done/left counter.</em>
+</p>
+
 ## Quickstart
 
 ```bash
