@@ -55,21 +55,27 @@ def channel_lookup(cfg: dict) -> dict[str, dict]:
     return {c["name"]: c for c in cfg["channels"]}
 
 
-def pack_spans(spans, target_ms, min_ms, max_ms):
+def pack_spans(spans, target_ms, min_ms, max_ms, max_gap_ms=0):
     """Yield (start_ms, end_ms) clips greedily packed from non-silent spans.
 
     Boundaries only ever land at span ends (i.e. inside a silence), so clips never cut
     mid-word. A span is added only if it keeps the clip within max_ms; once the clip
     reaches target_ms it is closed. Clips outside [min_ms, max_ms] are dropped.
+
+    The clip is a CONTIGUOUS slice [start..end], so silences BETWEEN packed spans stay in
+    the clip. `max_gap_ms` caps that: if the silence before the next span exceeds it, the
+    clip is closed first, so long internal dead air (e.g. ASMR pauses) is never packed in.
+    0 disables the gap check (keeps natural sentence pauses for normal speech).
     """
     clip_start = clip_end = None
     for start, end in spans:
+        gap_ok = (not max_gap_ms) or (clip_end is None) or (start - clip_end <= max_gap_ms)
         if clip_start is None:
             clip_start, clip_end = start, end
-        elif end - clip_start <= max_ms:
+        elif end - clip_start <= max_ms and gap_ok:
             clip_end = end
         else:
-            # adding this span would overflow max -> close current clip at last silence
+            # overflow OR a too-long silence gap -> close current clip at the last silence
             if clip_end - clip_start >= min_ms:
                 yield clip_start, clip_end
             clip_start, clip_end = start, end
@@ -113,9 +119,10 @@ def segment_raw(raw_path: str, cfg: dict, channels: dict, rows: dict) -> int:
     # A little breathing room so clips don't start/end flush on a word onset; pulled from the
     # surrounding silence (boundaries are at >= min_silence_ms gaps, so this stays in silence).
     pad_ms = int(cfg.get("clip_pad_ms", 0))
+    max_gap_ms = int(cfg.get("clip_max_gap_ms", 0))
 
     count = 0
-    for start_ms, end_ms in pack_spans(spans, target_ms, min_ms, max_ms):
+    for start_ms, end_ms in pack_spans(spans, target_ms, min_ms, max_ms, max_gap_ms):
         clip_id = f"{channel}_{videoid}_{count:03d}"
         clip_path = os.path.join(clips_dir, f"{clip_id}.wav")
         ps = max(0, start_ms - pad_ms)

@@ -152,6 +152,10 @@ def run(config_path: str = CONFIG_PATH) -> None:
     emotions = cfg["taxonomy"]["emotion"]
     styles = cfg["taxonomy"]["style"]
     model = cfg["llm"]["model"]
+    # Channels the curator KNOWS are whispered throughout (e.g. ASMR). The LLM tag sees only
+    # text+features and can't hear breathy/whispered phonation, so we force whisper=true here
+    # rather than rely on inference. (Humans can still override via human_whisper in review.)
+    whisper_channels = {c["name"] for c in cfg["channels"] if c.get("whisper")}
     rows = state.load(cfg["paths"]["manifest"])
 
     from datetime import datetime
@@ -184,6 +188,9 @@ def run(config_path: str = CONFIG_PATH) -> None:
             print(f"  [error] {cid}: {e}")
             errors += 1
             continue
+        # Curator override: ASMR/whisper channels are whispered throughout.
+        if row.get("source_channel") in whisper_channels:
+            tags["whisper"] = True
         # Cross-check against the audio model's vote (s4b) if it has run for this clip.
         agree = emotion_map.agreement(tags["llm_emotion"], row.get("audio_emotion"))
         if agree is not None:

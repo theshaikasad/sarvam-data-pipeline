@@ -29,7 +29,29 @@ DEFAULT_SEED = 42
 ELIGIBLE_STAGES = ("final", "described")
 
 
+def _channel_queue(clips: list[dict], rng: random.Random) -> list[dict]:
+    """Per-channel pick order: emotion-spread, with the clips that most NEED a human ear
+    (LLM<->audio emotion disagreement, or whispered) pulled to the FRONT."""
+    buckets: dict[str, list[dict]] = {}
+    for r in clips:
+        buckets.setdefault(r.get("llm_emotion", "unknown"), []).append(r)
+    for e in buckets:
+        buckets[e].sort(key=lambda r: r["clip_id"])  # determinism before shuffle
+        rng.shuffle(buckets[e])
+    q: list[dict] = []
+    order = sorted(buckets)
+    while any(buckets.values()):                    # round-robin across emotions -> spread
+        for e in order:
+            if buckets[e]:
+                q.append(buckets[e].pop())
+    q.sort(key=lambda r: 0 if (r.get("emotion_agree") == "disagree" or r.get("whisper"))
+           else 1)                                   # stable: priority clips first
+    return q
+
+
 def stratified_sample(rows: dict, n: int, seed: int) -> list[dict]:
+    """~n gold candidates PER LANGUAGE, spread EVENLY across that language's sources (so the
+    review set isn't dominated by one chatty channel), disagreement/whisper clips first."""
     rng = random.Random(seed)
     cands = [r for r in rows.values() if r.get("stage") in ELIGIBLE_STAGES]
     if not cands:
@@ -39,35 +61,21 @@ def stratified_sample(rows: dict, n: int, seed: int) -> list[dict]:
     for r in cands:
         by_lang.setdefault(r.get("language", "unknown"), []).append(r)
 
-    langs = sorted(by_lang)
-    # n is PER LANGUAGE: each language independently targets n gold candidates.
-    targets = {l: n for l in langs}
-
     selected: list[dict] = []
-    for lang in langs:
-        buckets: dict[str, list[dict]] = {}
+    for lang in sorted(by_lang):
+        by_chan: dict[str, list[dict]] = {}
         for r in by_lang[lang]:
-            buckets.setdefault(r.get("llm_emotion", "unknown"), []).append(r)
-        for e in buckets:
-            buckets[e].sort(key=lambda r: r["clip_id"])  # determinism before shuffle
-            rng.shuffle(buckets[e])
-            # Stable sort so LLM<->audio disagreements sit at the END of the bucket and are
-            # therefore pop()'d (i.e. selected) first; ties keep the shuffled order.
-            buckets[e].sort(key=lambda r: 1 if r.get("emotion_agree") == "disagree" else 0)
-
-        target = min(targets[lang], len(by_lang[lang]))
+            by_chan.setdefault(r.get("source_channel", "?"), []).append(r)
+        queues = {c: _channel_queue(by_chan[c], rng) for c in by_chan}
+        target = min(n, len(by_lang[lang]))
         picked: list[dict] = []
-        order = sorted(buckets)
-        while len(picked) < target:
-            progressed = False
-            for e in order:
-                if buckets[e]:
-                    picked.append(buckets[e].pop())
-                    progressed = True
+        order = sorted(queues)
+        while len(picked) < target and any(queues.values()):
+            for c in order:                          # round-robin across channels -> balance
+                if queues[c]:
+                    picked.append(queues[c].pop(0))
                     if len(picked) >= target:
                         break
-            if not progressed:
-                break
         selected.extend(picked)
     return selected
 
@@ -77,6 +85,11 @@ def run(n: int = DEFAULT_N, seed: int = DEFAULT_SEED, config_path: str = CONFIG_
         cfg = yaml.safe_load(f)
     manifest = cfg["paths"]["manifest"]
     rows = state.load(manifest)
+
+    # Fresh sample each run: clear any previous gold_candidate (human_verified is untouched,
+    # so already-reviewed clips stay reviewed).
+    for r in rows.values():
+        r.pop("gold_candidate", None)
 
     selected = stratified_sample(rows, n, seed)
     for r in selected:

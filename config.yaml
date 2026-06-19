@@ -110,6 +110,69 @@ channels:
     diarized: true      # multi-speaker -> keep dominant speaker only (s2b, not s2)
     max_videos: 5
 
+  # --- Diversity batch (added to fight narrative/calm skew + raise female share) ---
+  - name: En_Podcast_Raj
+    url_or_playlist: "https://youtu.be/7HXGdq3MXBw"        # Raj Shamani (male) podcast w/ a guest
+    language: en-IN
+    source_type: podcast_independent
+    gender: male        # Raj Shamani is male; diarize keeps the dominant speaker -> if a guest
+                        #   ends up dominant, s3 gender_detected reveals it and we patch.
+    diarized: true      # 2 speakers -> keep dominant only (single-speaker clips)
+    max_videos: 1
+  - name: En_Speech
+    url_or_playlist: "https://youtu.be/KeXaZpHyheY"        # Indian English speech (oratorical)
+    language: en-IN
+    source_type: public_lecture
+    gender: unknown     # not specified; gender_detected (s3) backs pitch binning
+    solo: true
+    max_videos: 1
+  - name: En_Standup_F1
+    url_or_playlist: "https://youtu.be/XaZV4_c0HHw"        # female standup (crowd noise -> s3 filters)
+    language: en-IN
+    source_type: standup_comedy
+    gender: female
+    solo: true          # one performer; crowd is NOISE (s3), not a 2nd speaker
+    max_videos: 1
+  - name: En_Standup_F2
+    url_or_playlist: "https://youtu.be/GjoDRctx6MU"        # female standup
+    language: en-IN
+    source_type: standup_comedy
+    gender: female
+    solo: true
+    max_videos: 1
+  - name: En_Standup_F3
+    url_or_playlist: "https://youtu.be/td1yLkUF6_M"        # female standup
+    language: en-IN
+    source_type: standup_comedy
+    gender: female
+    solo: true
+    max_videos: 1
+  - name: Te_Standup_M
+    url_or_playlist: "https://youtu.be/zi0OYzlQCCY"        # Telugu standup, male (crowd noise)
+    language: te-IN
+    source_type: standup_comedy
+    gender: male
+    solo: true
+    max_videos: 1
+  # ASMR (whispered) — adds whisper=true diversity. VAD trims dead air (clip_max_gap_ms);
+  # non-speech triggers (taps/crinkles) get labeled noise by s3 and dropped if >25%.
+  - name: Te_ASMR
+    url_or_playlist: "https://youtu.be/Vwj1FiZSN8Q"        # Telugu ASMR, female (whisper)
+    language: te-IN
+    source_type: asmr
+    gender: female
+    solo: true
+    whisper: true       # whole video is whispered -> force whisper=true (s6 can't hear it)
+    max_videos: 1
+  - name: En_ASMR
+    url_or_playlist: "https://youtu.be/ABd5Knh5cNE"        # English ASMR, female (whisper)
+    language: en-IN
+    source_type: asmr
+    gender: female
+    solo: true
+    whisper: true       # whole video is whispered -> force whisper=true
+    max_videos: 1
+
 # --- Segmentation / clip sizing (stay safely under Saaras sync 30s limit) ---
 # Default segmentation is VAD/silence packing (s2_segment.py) — best for SOLO sources.
 # For a MULTI-SPEAKER source (2-person podcast / interview, comedy with crowd talk-back, any
@@ -127,6 +190,9 @@ silence_thresh_db: -38
 clip_pad_ms: 120        # small lead-in/out (ms) added at each clip edge from surrounding
                         # silence, so clips don't start/end flush on a word onset (s2 & s2b).
                         # Existing clips are not re-cut; this applies to newly segmented ones.
+clip_max_gap_ms: 1000   # close a clip if the silence between phrases exceeds this (ms), so
+                        # long internal dead air (e.g. ASMR pauses) isn't packed into a clip.
+                        # 1000 keeps natural sentence pauses; 0 disables (s2 VAD path).
 
 # --- Music / noise / multi-speaker filter (s3) ---
 music_overlap_reject_threshold: 0.10   # reject clip if music overlaps >10%

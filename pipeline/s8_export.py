@@ -481,6 +481,10 @@ def run(config_path: str = CONFIG_PATH, dry_run: bool = False,
         print("s8: nothing at stage 'described' to export. Done.")
         return
 
+    # Shuffle so the published dataset isn't grouped by source (deterministic seed).
+    import random
+    random.Random(42).shuffle(records)
+
     n_gold = sum(1 for r in records if r["human_verified"])
     print(f"s8: exporting {len(records)} clips ({n_gold} gold / "
           f"{len(records) - n_gold} train).")
