@@ -151,6 +151,14 @@ Most quality came from catching the pipeline *silently* doing the wrong thing.
 | `source_type` | public_lecture 66 · standup_comedy 46 · podcast_independent 43 · podcast_storytelling 17 · audiobook 13 · asmr 5 |
 | Whisper | 5 |
 
+![Minutes per source — the over-collect-then-balance step spreads the budget evenly across all 14 sources and both languages, so no single channel dominates.](figures/fig_sources.png){width=78%}
+
+![Emotion distribution — the diversity push (standups, podcasts, ASMR) widened this from a neutral-only spike to 9 classes.](figures/fig_emotion.png){width=70%}
+
+![Style distribution — still narrative-leaning, but conversational is now well-represented thanks to the podcasts and standups.](figures/fig_style.png){width=70%}
+
+![Clip durations — every clip sits in the 18-28 s window, comfortably under the 30 s `saaras:v3` synchronous limit.](figures/fig_duration.png){width=70%}
+
 **Curation funnel:** `617 collected -> 60 music_bed + 79 crowd_noise + 13 manual + 275 balance_trim dropped -> 190 kept`. Rejected rows stay in the manifest as the audit trail.
 
 **WER / CER** (`eval/compute_wer.py`, on the 37 gold rows): **0.00 / 0.00** for both languages. **Honest caveat:** this is because the reviewers accepted the `saaras:v3` transcripts **verbatim** (`human_transcript == asr_transcript`), so it's an *ASR-approval rate on clean clips*, not an error rate against blind re-transcription. It's a real positive signal for Saaras on clean audio, but a stricter protocol would give a truer number.
