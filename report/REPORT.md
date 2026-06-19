@@ -1,185 +1,170 @@
 ---
-title: "Sarvam TTS-Dataset Take-Home"
+title: "Building a Telugu + Indian-English TTS Dataset"
+subtitle: "Sarvam AI take-home"
 geometry: margin=0.9in
-fontsize: 10pt
-mainfont: "Helvetica Neue"
+fontsize: 11pt
+mainfont: "Avenir Next"
 monofont: "Menlo"
 colorlinks: true
+linkcolor: RoyalBlue
+header-includes: |
+  \linespread{1.06}
 ---
 
-# A Single-Speaker TTS Dataset for Telugu + Indian English
+# The short version
 
-**190 clips / 79 minutes, balanced 95 Telugu + 95 Indian English, across 14 sources** — each clip a single speaker, with an accurate transcript and a Parler-TTS-style natural-language style/emotion description, published on HuggingFace.
+I set out to build a 60-minute, single-speaker text-to-speech dataset — roughly half Telugu, half Indian English — where every clip is one person speaking cleanly, with an accurate transcript and a plain-English sentence describing *how* it's said (the speaker's emotion, style, pace, pitch). I collected a lot more than I needed from 14 YouTube sources, ran it through a quality pipeline, listened to the data (my grandmother helped with the Telugu), and trimmed it down to a balanced set.
 
-> The current export is an **over-collected ~80-min review buffer** (~40 min per language), deliberately larger than the 60-min target so clips can be rejected during the human pass and still clear the >=30 min/language bar. `pipeline/balance.py <minutes>` re-culls to the final size after review.
+**Where it landed:** 190 clips, 79 minutes, split evenly (95 Telugu / 95 English). This is a deliberately over-sized "review buffer" — bigger than 60 minutes on purpose, so clips can be thrown out during review and the set still clears the 30-min-per-language bar. The script `pipeline/balance.py` re-trims it to the final size whenever I want.
 
-The brief is graded on **data quality and curation judgment, not code**, so this report is mostly the *story*: what I built, every place the pipeline quietly did the wrong thing, what I did about it, and what I'd do next.
+The assignment says it's graded on *data quality and judgment, not code*, so most of this report is the story: what I built, the things that went wrong, and what I'd fix.
 
----
+# A quick glossary
 
-## 0. Where it started: a one-clip spike
+A few terms show up throughout. In plain language:
 
-Before any pipeline, I wrote a throwaway end-to-end script on a *single* YouTube link to de-risk the Sarvam APIs and the data shape:
+| Term | What it means here |
+|---|---|
+| **ASR** | Automatic Speech Recognition — turning audio into text. Sarvam's model is `saaras:v3`. |
+| **VAD** | Voice Activity Detection — finding where speech is vs. silence, so I can cut clips at pauses. |
+| **Diarization** | "Who spoke when" — splitting a recording by speaker, so I can keep just one person. |
+| **SER** | Speech Emotion Recognition — a model that guesses emotion from the *sound*, not the words. |
+| **Parler-style description** | A natural-language sentence describing delivery (e.g. *"A woman narrates slowly in a calm voice"*), the format the Parler-TTS project popularised. |
+| **Code-switching** | Mixing two languages in one sentence — extremely common in Indian speech (Telugu with English words). |
+| **WER / CER** | Word / Character Error Rate — how far a transcript is from the correct one (lower is better). |
+| **Manifest** | My single bookkeeping file, `data/manifest.jsonl` — one row per clip holding everything known about it. |
 
-> `yt-dlp` -> `raw.wav`    `ffmpeg` -> 16 kHz mono (`norm.wav`)    cut a **fixed 30 s segment from 0:60** (`clip_000.wav`)    `librosa` features    `saaras:v3` transcript    `sarvam-30b` -> emotion / style / confidence / reasoning    one `manifest.jsonl` row.
+# The sources I collected (what the names mean)
 
-It answered three questions cheaply: *can I get clean 16 kHz audio from YouTube, does Saaras handle a ~25 s Telugu/Indian-English clip, and can the LLM return structured tags?* All yes. Crucially, that **fixed-time 30 s cut** is exactly the naive approach the production pipeline had to replace — it chops mid-word and ignores who's speaking. Everything after the spike was **curation**: silence-aware cutting, music/crowd rejection, diarization, the human/machine split, and balancing. Those gates are the actual work.
+The dataset is only as good as what goes in, so I picked sources for *variety* — different speakers, genders, and speaking styles — not just whatever was easy. Each gets a short code-name in the config:
 
----
+| Source name | What it actually is | Lang | Why I chose it |
+|---|---|---|---|
+| `Harshaneeyam` | A Telugu literary **storytelling** podcast | te | emotional range (sad, excited) |
+| `BV_Pattabhiram` | A Telugu **motivational / counselling** lecture | te | calm, serious delivery |
+| `Garikapati` | Garikapati N. Rao's Telugu **literary discourse** | te | oratorical, animated |
+| `Te_Standup_M` | A Telugu **stand-up comedy** set (male) | te | playful/happy + a crowd-noise test |
+| `Te_ASMR` | Telugu **ASMR** (whispered) | te | the only way to get *whisper* clips |
+| `En_Podcast_Raj` | A long **podcast** that turned out to be Telugu (see iteration 6) | te | conversational; added a female Telugu voice |
+| `TED_India` | A **TEDx India** talk | en | clear oratorical English |
+| `EN_Audiobook` | An Indian-English **audiobook** narration (female) | en | clean narrative reference |
+| `EN_Podcast_Solo` | A solo Indian-English **podcast** monologue (male) | en | conversational |
+| `En_Comedy` | *"A Moment of Silence"*, a **multi-host comedy podcast** (female-led) | en | playful/happy; diarized to one speaker |
+| `En_Speech` | An Indian-English **speech** | en | oratorical |
+| `En_Standup_F1/F2/F3` | Three **female stand-up** specials | en | fix a male-heavy roster; happy/excited |
 
-## 1. The pipeline: a manifest-driven state machine
+So when I say "`En_Comedy`", that's a real comedy podcast with several hosts talking over each other — which is exactly why it needed diarization to pull out a single voice.
 
-`data/manifest.jsonl` is the **single source of truth** — one JSON row per clip. Every stage loads it, filters rows by a `stage` field, processes them, and writes back. Each row walks a state machine:
+# 1. What I built and how the pipeline works
 
-```
-downloaded -> segmented -> music_checked -> transcribed -> tagged -> described -> final
-                                                       (or  rejected + rejected_reason)
-```
+The whole thing is a chain of small scripts, each doing one job and writing its result back to one file (`data/manifest.jsonl`). Because every clip's progress is recorded in that file, I can stop and restart anywhere — which mattered, because I hit crashes and ran out of API credits more than once, and every restart just picked up where it left off.
 
-Because progress lives in the manifest, the whole pipeline is **crash- and credit-safe**: re-running any stage skips rows already past it. (This saved me repeatedly — I hit dependency crashes and ran out of API credits mid-run, and every restart resumed exactly where it stopped.)
+![The pipeline. Each stage reads the manifest, does its one job, and writes back. Teal stages call a Sarvam API; the rest are local helpers. Rejected clips are kept (as an audit log), and a human-review step produces the trusted "gold" clips before export.](figures/fig_pipeline.png){width=100%}
 
-### Stage by stage
+Walking through the stages:
 
-- **`s1_download`** — `yt-dlp` pulls each source's audio; `ffmpeg` normalizes to **16 kHz mono, -23 LUFS**. A download archive means re-runs only fetch new URLs.
-- **`s2_segment`** — VAD via `pydub.silence`. It cuts **only at silences >= 300 ms** and greedily packs speech into **18-28 s** windows, so a boundary can never fall mid-word, and every clip stays under the **30 s `saaras:v3` synchronous limit**. Adds a small `clip_pad_ms` lead-in/out and breaks on `clip_max_gap_ms` of internal silence (see iterations).
-- **`s2b_diarized_segment`** *(opt-in per source)* — for genuine multi-speaker audio (interviews, multi-host podcasts) it runs the **Sarvam Batch STT API with diarization**, keeps only the **dominant speaker's** phrase chunks, and packs those. Single-speaker by construction.
-- **`s3_music_filter`** — `inaSpeechSegmenter` labels speech / music / noise per frame. **Detect-and-drop, never repair:** music bed > 10% -> reject `music_bed`; crowd noise > 25% -> reject `crowd_noise`; both-genders present -> reject `multi_speaker` (with a `solo:` opt-out, see iterations). Survivors carry a `recording_quality` downgrade.
-- **`s4_features`** — `librosa` pitch (YIN), energy, speaking rate -> binned into the Parler axes.
-- **`s4b_audio_emotion`** — a wav2vec2 speech-emotion model on the **raw waveform**: a *second*, audio-grounded emotion opinion (the signal the text LLM can't see).
-- **`s5_asr`** — **Sarvam `saaras:v3`**, `mode=transcribe`, with the **known** language code (`te-IN`/`en-IN`) for accuracy.
-- **`s6_tag`** — **Sarvam `sarvam-30b`** assigns `emotion` / `style` / `whisper` from transcript + features, then cross-checks against the s4b audio vote.
-- **`s7_describe`** — **`sarvam-30b`** composes the one-sentence Parler description.
-- **`s8_export`** — builds the HuggingFace `datasets` object (16 kHz `Audio`), shuffles, writes the dataset card, pushes public.
+- **Download** (`s1`) — grab each source's audio with `yt-dlp`, convert to 16 kHz mono and even out the loudness with `ffmpeg`.
+- **Segment** (`s2`) — cut each recording into ~25-second clips, but *only at silences*, so a word is never chopped in half. Every clip stays under the 30-second limit Sarvam's ASR needs. For sources with more than one speaker, `s2b` instead runs Sarvam's diarization and keeps only the person who talks the most.
+- **Filter** (`s3`) — listen for problems and *throw clips out*: background music, crowd noise, or two people in one clip. I never try to "repair" audio — for TTS, a cleaned-up clip is worse than no clip.
+- **Features** (`s4`, `s4b`) — measure pitch, energy, and pace; and separately, run a model that guesses emotion straight from the *sound*.
+- **Transcribe** (`s5`) — send each clip to Sarvam `saaras:v3`, telling it the language up front for accuracy.
+- **Tag & describe** (`s6`, `s7`) — ask Sarvam's `sarvam-30b` for the emotion, style, and whisper flag, then for the one-sentence description.
+- **Export** (`s8`) — package it as a HuggingFace dataset and publish.
 
-**Sarvam everywhere it's mandated:** ASR (`saaras:v3`), diarization (Batch STT), and all LLM tagging/description (`sarvam-30b`). The non-Sarvam pieces (VAD, music filter, acoustic features, audio-emotion) only exist where Sarvam has no endpoint.
+## The one rule I'm proud of
 
-### The schema (and the one rule that matters)
-
-Each manifest row groups its fields by *who owns them*. **Machine columns and human columns are separate keys that never overwrite each other** — the single most important design decision in the project:
-
-```
-identity   : clip_id, source_url, source_channel, source_type, language, gender,
-             start_time, end_time, duration
-quality(s3): has_music, music_confidence, has_noise, noise_confidence,
-             has_multi_speaker, gender_detected
-acoustic   : pitch_mean, pitch_std, energy_rms, speaking_rate  (+ *_bin derived axes)
-asr   (s5) : asr_transcript, asr_model, asr_language_detected, asr_confidence
-llm   (s6) : llm_emotion, llm_style, whisper, llm_confidence, llm_reasoning, annotated_at
-audio (s4b): audio_emotion, audio_emotion_score, emotion_agree
-human (UI) : human_transcript, human_emotion, human_style, human_whisper,
-             human_verified, reviewer, reviewed_at
-```
-
-A reviewer can only write `human_*`. The `final_*` fields are computed **only at export**:
+The machine's guesses and the human's corrections are kept in **separate columns that never overwrite each other**. The transcript Sarvam produced lives in `asr_transcript`; if a human fixes it, that goes in `human_transcript`. They're combined only at the very end:
 
 ```python
-final_transcript = human_transcript or asr_transcript
+final_transcript = human_transcript or asr_transcript   # human wins if present
 final_emotion    = human_emotion    or llm_emotion
 ```
 
-So the raw machine output always survives for honest WER measurement, and `human_verified` rows become the **`gold`** split. The published columns are `clip_id, audio, text, language, emotion, style, whisper, speaking_rate_bin, pitch_bin, pitch_variation, recording_quality, description, speaker_id, gender, duration, source_url, source_channel, source_type, human_verified, split` (+ the `audio_*` second opinion).
+This means the raw machine output is never lost, so I can always measure honestly how good the ASR was. Human-checked clips become the trusted **gold** set. A manifest row, grouped by who owns each field:
 
----
+```
+identity : clip_id, source_channel, language, gender, duration, ...
+machine  : asr_transcript / llm_emotion / llm_style / whisper / audio_emotion ...
+human    : human_transcript / human_emotion / human_verified / reviewer ...
+```
 
-## 2. "Listen to the data": the human-review loop
+# 2. Iterations I did to improve data quality
 
-The brief says listening to the data is the core of the grade, so I built a **bilingual Gradio review UI** designed for a *non-technical* reviewer — specifically so my **Telugu-reading grandmother could verify the Telugu transcripts**, which is far better ground truth than me (I don't read Telugu).
+Almost every quality gain came from catching the pipeline quietly doing the wrong thing. In order:
 
-Everything about it is built for her: a one-click **Telugu / English** language toggle (she sees only Telugu clips), **very large** transcript text, **emoji** emotion/style buttons so feeling is judged *by ear, not by reading an English word*, autoplaying audio, a progress tracker (done / left), an online-test-style "jump to any clip" palette, and big **Save / Reject** buttons. Her job per clip: listen, confirm or fix the transcript, tap how it sounds, Save — or Reject a bad clip. Her name is stamped into `reviewer`.
+1. **The music filter wasn't filtering anything.** The library I used (`inaSpeechSegmenter`) crashed on every single clip due to a version mismatch — but the crash was swallowed, so the stage "succeeded" while detecting zero music. I had to pin an older Keras and patch a NumPy call. *Lesson: a stage that fails silently is more dangerous than one that crashes loudly.*
 
-![The review UI — large editable transcript, Save / Reject / Back / Next, defaulting to a small source-balanced "Review set" so the reviewer checks high-value clips, not all 190.](figures/review_ui.png){width=82%}
+2. **70 good clips were wrongly thrown out as "two speakers."** The gender detector was labelling chunks of one expressive male storyteller as "female" (his pitch swings fooled it), which tripped the two-speaker check. I added a per-source `solo: true` flag meaning "I listened, it's one person — skip that check."
 
-![The bilingual, emoji-driven version built for a non-technical Telugu reader: language toggle, emoji emotion/style (judged by sound), and a done/left progress bar.](figures/review_ui_full.png){width=82%}
+3. **The LLM returned blank answers and burned through credits.** `sarvam-30b` is a *reasoning* model: left alone it spent its entire token budget "thinking" and returned nothing. Every call was both expensive and useless. The fix was one setting (`reasoning_effort=None`) that turns thinking off — about 60x cheaper and 30x faster.
 
-This pass verified **37 clips** (20 English by me, 17 Telugu by my grandmother) and **rejected 13** bad clips by ear. Review time is steered to where it's worth most: s4b's audio-emotion vote is compared with s6's text-emotion vote in valence/arousal space, and the **161/190 disagreements** are pushed to the front of the queue.
+4. **A whole source was silently skipped** because its YouTube id had an underscore in it, which broke my filename parsing. Fixed by matching against the known source names.
 
----
+5. **Clips started too abruptly.** I was cutting flush to the first sound, which clipped the start of words. Added a small 120 ms cushion taken from the surrounding silence. For ASMR I also had to stop long silent gaps from being packed into clips.
 
-## 3. Iterations that improved quality (the war stories)
+6. **A source I labelled "English" was actually Telugu.** `En_Podcast_Raj` is Telugu with heavy English mixing, but I'd set it to English — so Sarvam faithfully wrote the Telugu in Latin letters (*"O pakka divorce teesukunna vaadu..."*). It *sounded* Telugu but *read* English. Only listening caught it. Relabelling it Telugu and re-running gave proper Telugu script, and I noticed the main speaker is female — which helped balance the dataset.
 
-Most quality came from catching the pipeline *silently* doing the wrong thing.
+7. **Whisper can't be detected from text.** The LLM only sees the words, so it can't know a clip is whispered. For ASMR sources I just tell it directly with a `whisper: true` flag.
 
-1. **The music filter detected nothing — and "succeeded."** `inaSpeechSegmenter`'s bundled `pyannote.algorithms` calls `np.vstack(<generator>)` (rejected by NumPy >= 1.24); once shimmed, its Keras-2 CNNs crash under Keras 3 (TF >= 2.16). The first run errored on **all 235 clips, kept 0, flagged no music** — while reporting success. Fixed with a repo-local viterbi shim + `TF_USE_LEGACY_KERAS=1`. *Lesson: a stage that fails silently is worse than one that crashes.*
+8. **Over-collect, then balance.** I gathered 617 clips, then wrote `balance.py` to trim down to an even spread across every source and both languages, always keeping any clip a human had already checked.
 
-2. **70 good clips wrongly rejected as "multi-speaker."** Measuring the splits showed the gender CNN labeling **39-51% of one expressive male storyteller's speech as "female"** (pitch swings fool a binary classifier). Added a per-channel `solo: true` opt-out ("I listened, it's one speaker") that skips the noisy guard; recovered the clips.
-
-3. **`sarvam-30b` returned empty answers *and* burned credits.** It's a reasoning model: with no `max_tokens` it spent the entire 4096-token starter-tier budget on hidden chain-of-thought and returned `content=None` — maximally expensive, zero output. The fix (from Sarvam's docs) is `reasoning_effort=None` — an explicit JSON null, *not* the string `"none"` (which 400s) — giving direct JSON in ~70 tokens / ~0.5 s: **~60x cheaper, ~30x faster.**
-
-4. **A YouTube id with an underscore skipped a whole source.** Filename parsing used `rpartition("_")`, but ids like `DV1zxu47_mA` broke it -> a podcast silently dropped. Fixed with known-channel-name matching.
-
-5. **Clips cut flush to the first sample** risked clipped onsets -> added `clip_pad_ms` (120 ms lead-in/out from surrounding silence).
-
-6. **ASMR edge cases.** Long internal pauses got packed into clips -> `clip_max_gap_ms`. The LLM can't *hear* whisper from text -> per-channel `whisper: true` override. And **English ASMR segmented to 0 clips** because it's whispered *below* the -38 dB silence threshold (VAD reads it as silence) — a real limitation (§5).
-
-7. **A whole "English" source was actually Telugu — caught only by listening.** `En_Podcast_Raj` was configured `en-IN`, so Saaras faithfully **romanized** the Telugu into Latin script ("*O pakka divorce teesukunna vaadu judge chesestoo...*"): it *played* Telugu but *read* English. Relabeling it `te-IN` and re-running ASR -> tag -> describe gave proper Telugu script; listening also revealed the dominant speaker is **female** (configured `male`), which re-binned pitch and rewrote descriptions. Net: the source moved to the Telugu column and pushed the dataset's **female share to ~40%**.
-
-8. **Over-collect, then balance.** Collected **617 clips**, then `balance.py` culls to a balanced target — round-robin across each language's sources (so the tiny 2-min ASMR channel doesn't strand budget), always keeping reviewed clips, marking the rest as recoverable `balance_trim`.
-
-9. **Ran out of credits twice** (the reasoning bug, then scale). Resumability meant each top-up continued with zero rework.
-
----
-
-## 4. What worked & what didn't
+# 3. What worked and what didn't
 
 **Worked**
 
-- **Silence-based segmentation:** every clip lands on a silence; **0 of 190 clips exceed the 30 s limit** (18.3-28.2 s); no mid-word cuts.
-- **`saaras:v3` + code-switching:** it transliterates code-switched English into Telugu script (almost no Telugu clip contains Latin text). On the human-checked gold clips the transcripts were accepted essentially verbatim.
-- **Diarization** extracted clean single-speaker clips from 3-4-person podcasts.
-- **Crowd-noise filter** dropped **79 standup clips** drowned in applause while keeping the clean ones.
-- **The diversity push moved the needle:** style narrative 124 / **conversational 58**; emotion now spans 9 classes; **female up to 31 min (40%)**; 5 whisper clips.
+- Cutting only at silences: all 190 clips land between 18 and 28 seconds, none over the limit, no chopped words.
+- Sarvam's ASR is strong on clean audio — on the clips a human checked, the transcripts were good enough to accept as-is. It also handles Telugu-English mixing and writes the English in Telugu script.
+- Diarization cleanly pulled single speakers out of 3-4-person podcasts.
+- The crowd-noise filter removed 79 noisy stand-up clips.
+- The diversity push worked: I went from an almost entirely "narrative + neutral" set to one with real conversational and playful clips, and from 90% male to ~40% female.
 
-**Didn't (honest)**
+**Didn't**
 
-- **Crowd noise still leaks through on some kept standup clips.** Adding standups was right for emotion diversity (they supply most `happy`/`playful`/`excited` clips), but the s3 gate is a coarse "noise fraction > 25%" rule, and a 3-class segmenter can't separate "clean voice" from "voice + light applause" — so sub-threshold audience noise survives. Human review catches the worst; this is the dataset's weakest spot (fix in §5).
-- **English ASMR -> 0 clips** (whisper below the silence floor).
-- **Text-vs-audio emotion agreement is only ~15% (29/190).** The audio SER model is English/German-trained, so it's approximate on Telugu — used *only* as a relative cross-check to route human attention, never as a label.
-- **Style still narrative-leaning** (124/190): long-form Indian content skews monologue.
+- **Some crowd noise still slips through.** My noise check is a blunt "is more than 25% of the clip noisy?" rule, and the detector can't tell "clean voice" from "voice with light laughter underneath", so a few stand-up clips kept faint audience noise. This is the dataset's weakest spot.
+- **English ASMR produced zero clips** — it's whispered so quietly that my silence detector treated the whole thing as silence.
+- The audio-emotion model and the text-LLM only agree ~15% of the time on Telugu, because that model was trained on English/German. I use it only to *flag* clips for human attention, never as a label.
+- The set still leans narrative — long-form Indian content is mostly monologue.
 
----
+# 4. Quality observations and decisions I made
 
-## 5. Quality observations & decisions
+The final set, by the numbers:
 
-**Final composition (190 clips / 79.0 min):**
-
-| Axis | Distribution |
+| | |
 |---|---|
-| Language | Telugu 39.7 min (95) · Indian English 39.2 min (95) |
-| Gender | male 41.1 min · **female 31.1 min (40%)** · unknown 6.8 |
-| Style | narrative 124 · conversational 58 · oratorical 5 · dramatic 2 · instructional 1 |
-| Emotion | neutral 60 · sad 31 · excited 25 · serious 21 · happy 18 · playful 12 · angry 12 · calm 9 · surprised 2 |
-| `source_type` | public_lecture 66 · standup_comedy 46 · podcast_independent 43 · podcast_storytelling 17 · audiobook 13 · asmr 5 |
-| Whisper | 5 |
+| Language | Telugu 39.7 min (95 clips) · English 39.2 min (95) |
+| Gender | male 41 min · female 31 min (~40%) · unknown 7 |
+| Whisper clips | 5 |
+| Collected -> kept | 617 -> 190 (dropped: 60 music, 79 crowd, 13 by hand, 275 to balance) |
 
-![Minutes per source — the over-collect-then-balance step spreads the budget evenly across all 14 sources and both languages, so no single channel dominates.](figures/fig_sources.png){width=78%}
+![Minutes per source. The over-collect-then-balance step spreads the time evenly across all 14 sources, so no single channel dominates.](figures/fig_sources.png){width=80%}
 
-![Emotion distribution — the diversity push (standups, podcasts, ASMR) widened this from a neutral-only spike to 9 classes.](figures/fig_emotion.png){width=70%}
+![Emotion spread. Adding stand-up, podcasts and ASMR widened this from a neutral-only spike to nine emotions.](figures/fig_emotion.png){width=66%}
 
-![Style distribution — still narrative-leaning, but conversational is now well-represented thanks to the podcasts and standups.](figures/fig_style.png){width=70%}
+![Speaking style. Still narrative-heavy, but conversational is now well represented.](figures/fig_style.png){width=66%}
 
-![Clip durations — every clip sits in the 18-28 s window, comfortably under the 30 s `saaras:v3` synchronous limit.](figures/fig_duration.png){width=70%}
+**On accuracy (WER/CER).** Measured on the 37 human-checked clips, error rate is 0.00 — but I want to be honest about what that means: the reviewers *accepted Sarvam's transcripts unchanged*, so this is really an "approval rate" on clean clips, not a strict error rate against a from-scratch transcription. It's a genuinely good sign for Sarvam on clean audio, but a stricter test (re-transcribing blind) would give a truer number.
 
-**Curation funnel:** `617 collected -> 60 music_bed + 79 crowd_noise + 13 manual + 275 balance_trim dropped -> 190 kept`. Rejected rows stay in the manifest as the audit trail.
+**Decisions worth calling out:**
 
-**WER / CER** (`eval/compute_wer.py`, on the 37 gold rows): **0.00 / 0.00** for both languages. **Honest caveat:** this is because the reviewers accepted the `saaras:v3` transcripts **verbatim** (`human_transcript == asr_transcript`), so it's an *ASR-approval rate on clean clips*, not an error rate against blind re-transcription. It's a real positive signal for Saaras on clean audio, but a stricter protocol would give a truer number.
+- **Two opinions on emotion.** The text LLM reads the words; a separate model listens to the sound. When they disagree (they did on 161 of 190 clips), that clip goes to the front of the human-review queue — that's where a human's time is worth the most.
+- **Listening is the real work, so I made it easy.** I built a review app a non-technical person could use, and my Telugu-reading grandmother checked the Telugu clips — better ground truth than me, since I don't read Telugu. She listened, confirmed or fixed the text, tapped an emoji for the feeling, and saved (or rejected bad clips). 37 verified, 13 rejected.
 
-**Decisions worth calling out:** two independent emotion opinions (text + waveform) with disagreements routed to humans; detect-and-drop over source separation; per-gender pitch binning with a detected-gender fallback; rich descriptions over bare labels (Bulbul V3 has no emotion parameter — it infers prosody from text); and treating only `gold` as fully trusted (everything else is weak supervision).
+![The review app: play the clip, fix the transcript if needed, tap how it sounds, Save or Reject. It opens on a small, balanced "review set" so you check a handful of important clips, not all 190.](figures/review_ui.png){width=80%}
 
----
+![The bilingual version made for my grandmother — Telugu labels, big text, emoji for emotion so nothing needs reading in English, and a done/left counter.](figures/review_ui_full.png){width=80%}
 
-## 6. What I'd improve given more time
+# 5. What I'd improve given more time
 
-**Process (the honest one first): verify each stage before chaining it, and don't outsource the thinking.** My biggest mistake was *how* I built it: once the one-clip spike worked, I implemented `s1`–`s8` in one sweep and only discovered the **silent** failures — the music filter detecting nothing, `sarvam-30b` returning empty `content` — when I ran the whole chain end-to-end, instead of validating each stage on a few clips first. Leaning heavily on AI agents for the implementation made it easy to accept plausible-looking code without checking each component's output myself, so bugs hid behind stages that "succeeded." Next time I'd (a) write a tiny smoke test per stage — run it on 2-3 clips and assert the exact manifest fields it should produce before moving on — and (b) treat the AI as a pair-programmer whose output I review stage-by-stage, not as the driver. Most of the war-stories in §3 would have been caught in minutes instead of mid-run.
+**First, how I worked.** My biggest mistake was process, not code: once the first small test worked, I built the whole pipeline in one go and leaned heavily on AI agents to write it — so the silent bugs above only surfaced when I ran everything together. Next time I'd test each stage on two or three clips and check its output myself before moving to the next, and treat the AI as a pair-programmer I review rather than letting it drive.
 
-Technical improvements:
+**Then, the data:**
 
-- **Better noise detection & removal** (top priority — the crowd-noise leak). Replace the single coarse threshold with: (a) **per-clip SNR** from the silence regions, rejecting on SNR not just noise-fraction; (b) a **learned audio-event tagger** (YAMNet/PANNs for applause/laughter/crowd/music) as a finer second opinion that rejects on *any* strong non-speech event over the voice; (c) **targeted denoising** (RNNoise / DeepFilterNet) on borderline clips only, with a before/after check so it never touches clean audio; (d) a lower review threshold so more borderline clips reach the human ear.
-- **Smaller clips to reduce 2-speaker overlap.** Shorter windows (~8-12 s vs ~25 s) span fewer speaker turns, so the odds of two voices (or a guest interjection) in one clip drop sharply — important for podcasts/interviews. Trade-off: more clips and ASR calls. I'd pair it with a per-clip diarization-confidence check that drops any clip with second-speaker energy.
-- **Better audio processing overall:** per-channel VAD thresholds (a lower `silence_thresh_db` recovers the English ASMR), consistent high-pass/de-essing, and forced alignment for tight word-level onset trimming.
-- **Stronger emotion labels:** a multilingual SER model (`MERaLiON-SER-v1`, covers Tamil + emits VAD dims) to lift the ~15% audio/text agreement on Telugu.
-- **More balance & scale:** more *female Telugu* sources, more genres (debate, devotional, news) to break the narrative lean, a YouTube scraper to scale past the hand-picked roster, and a fuller human-review pass for a larger gold set + real WER.
+- **Better noise detection** (the top fix). Instead of one blunt threshold, measure each clip's signal-to-noise ratio, add a model that specifically detects applause/laughter/crowd, gently denoise only the borderline clips, and send more of them to a human ear.
+- **Shorter clips** (say 8-12 seconds). Smaller windows span fewer speaker turns, so there's far less chance of two voices landing in one clip — the main risk with podcasts.
+- **Per-source silence settings** so quiet ASMR segments properly (this would recover the English ASMR I lost).
+- **A multilingual emotion model** that actually knows Indian languages, so the audio and text emotion opinions agree more often.
+- **More female Telugu sources, more genres, and a YouTube scraper** to scale past a hand-picked roster — plus a fuller human-review pass for a larger trusted set.
 
----
+# Ethics and licensing
 
-## Ethics & licensing
-Every clip records its `source_type`. I avoid copyrighted film/music audio and drop any clip with a detected music bed. Redistribution rights for third-party source audio aren't individually cleared, so the dataset is for **research/educational use**; the `cc-by-4.0` tag covers the annotations contributed here. Downstream users must verify rights for the underlying audio.
+Every clip records where it came from and what kind of source it is. I avoided copyrighted film and music, and dropped anything with a music bed. I haven't individually cleared redistribution rights for the underlying audio, so the dataset is meant for **research and educational use**; the licence tag covers the annotations I added. Anyone using it commercially should clear the source audio themselves.
