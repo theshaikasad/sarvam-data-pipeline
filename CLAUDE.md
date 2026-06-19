@@ -22,8 +22,12 @@ quality metrics, and good decisions.
 - **ASR language:** `language_code` accepts `"unknown"` (auto-detect), but we KNOW each
   channel's language, so pass the explicit code (`te-IN` / `en-IN`) for higher accuracy.
   `"unknown"` is fallback only.
-- **LLM:** model `sarvam-30b` (`sarvam-m` is legacy) via OpenAI-compatible client,
-  `base_url="https://api.sarvam.ai/v1"`, `api_key=$SARVAM_KEY`.
+- **LLM:** model `sarvam-30b` (`sarvam-m`/`sarvam-105b` are the other options; `sarvam-m`
+  is deprecated) via OpenAI-compatible client, `base_url="https://api.sarvam.ai/v1"`,
+  `api_key=$SARVAM_KEY`. **CRITICAL:** `sarvam-30b` is a REASONING model — by default it
+  spends the whole token budget (4096 on the starter tier) on hidden chain-of-thought and
+  returns `content=None`. Pass `extra_body={"reasoning_effort": None}` (an explicit JSON
+  null, NOT the string `"none"` which 400s) to disable thinking for direct, cheap answers.
 - **Docs index for AI tools:** https://docs.sarvam.ai/llms-full.txt (full API reference, one file).
 - **Report context:** Bulbul V3 (Sarvam's TTS) has **NO emotion parameter** — it's LLM-based
   and infers prosody from text/context. This is WHY we produce rich Parler-style
@@ -182,3 +186,22 @@ slice usable as a **quality anchor**.
   (CER matters for Telugu script).
 - Emotion distribution and duration histograms.
 - Report the **worst ASR failures** with examples.
+
+## As-built status (final)
+- **Dataset:** 140 clips / 58.6 min, balanced across **14 sources** (9 Indian English ~32 min,
+  5 Telugu ~27 min). 617 clips collected -> dropped 60 music_bed + 79 crowd_noise + 2 manual
+  + 336 balance_trim. Gender: male 35 min / female 20 min / unknown 3.7. Whisper: 5 (ASMR).
+- **Per-channel config flags that emerged** (set on a channel block in config.yaml):
+  - `solo: true` — verified single-speaker; s3 skips the noisy gender multi-speaker guard.
+  - `diarized: true` — multi-speaker source; s2b keeps only the dominant speaker (s2 skips it).
+  - `whisper: true` — ASMR/whispered throughout; s6 forces whisper=true (LLM can't hear it).
+  - `gender: male|female|unknown` — backs per-gender pitch_bin; unknown falls back to s3's
+    per-clip `gender_detected`.
+- **New segmentation knobs:** `clip_pad_ms` (lead-in/out from surrounding silence so clips
+  don't start flush on a word onset) and `clip_max_gap_ms` (close a clip on long internal
+  silence — needed for ASMR dead air).
+- **`pipeline/balance.py [min]`** — over-collect then cull to a balanced N-minute set (even
+  across languages and sources, keeps human_verified clips, marks the rest `balance_trim`).
+- **`eval/snapshot.py`** — text corpus report at any stage. **`s8` shuffles** rows on export.
+- **Known limitation:** English ASMR is whispered below the −38 dB silence threshold, so VAD
+  reads it as silence (0 clips). Fix = per-channel lower `silence_thresh_db`.
