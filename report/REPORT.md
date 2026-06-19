@@ -59,7 +59,7 @@ So when I say "`En_Comedy`", that's a real comedy podcast with several hosts tal
 
 The whole thing is a chain of small scripts, each doing one job and writing its result back to one file (`data/manifest.jsonl`). Because every clip's progress is recorded in that file, I can stop and restart anywhere — which mattered, because I hit crashes and ran out of API credits more than once, and every restart just picked up where it left off.
 
-![The pipeline. Each stage reads the manifest, does its one job, and writes back. Teal stages call a Sarvam API; the rest are local helpers. Rejected clips are kept (as an audit log), and a human-review step produces the trusted "gold" clips before export.](figures/fig_pipeline.png){width=100%}
+![The pipeline. Each stage reads the manifest, does its one job, and writes back. Teal stages call a Sarvam API; the rest are local helpers. Rejected clips are kept (as an audit log), and a human-review step produces the trusted "gold" clips before export.](figures/fig_pipeline.png){width=52%}
 
 Walking through the stages:
 

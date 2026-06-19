@@ -74,48 +74,57 @@ def fig_duration(clips):
 
 
 def fig_pipeline():
-    """Hand-drawn horizontal flowchart of the 8-stage pipeline."""
+    """Hand-drawn VERTICAL flowchart of the 8-stage pipeline."""
     from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
-    SARVAM, HELPER, HUMAN = "#2e6f95", "#52658a", "#e29578"
+    SARVAM, HELPER, HUMAN, REJ = "#2e6f95", "#52658a", "#e29578", "#c0392b"
     stages = [
-        ("s1  Download", "yt-dlp + ffmpeg\n16 kHz mono", HELPER),
-        ("s2 / s2b  Segment", "VAD or diarize\n~25 s, no mid-word", HELPER),
-        ("s3  Filter", "drop music /\ncrowd / 2-speaker", HELPER),
-        ("s4 + s4b  Features", "pitch, energy +\naudio emotion", HELPER),
-        ("s5  ASR", "Sarvam saaras:v3\ntranscript", SARVAM),
-        ("s6  Tag", "sarvam-30b\nemotion / style", SARVAM),
-        ("s7  Describe", "sarvam-30b\nParler sentence", SARVAM),
-        ("s8  Export", "HuggingFace\n(public)", HELPER),
+        ("s1  Download", "yt-dlp + ffmpeg, 16 kHz mono", HELPER),
+        ("s2 / s2b  Segment", "VAD or diarize; ~25 s, no mid-word", HELPER),
+        ("s3  Filter", "drop music / crowd / 2-speaker", HELPER),
+        ("s4 + s4b  Features", "pitch, energy + audio emotion", HELPER),
+        ("s5  ASR", "Sarvam saaras:v3 -> transcript", SARVAM),
+        ("s6  Tag", "sarvam-30b -> emotion / style", SARVAM),
+        ("s7  Describe", "sarvam-30b -> Parler sentence", SARVAM),
+        ("s8  Export", "HuggingFace dataset (public)", HELPER),
     ]
-    fig, ax = plt.subplots(figsize=(12, 3.2))
-    n = len(stages); bw, bh, gap = 1.0, 1.0, 0.45
+    n = len(stages)
+    bw, bh, gap = 4.2, 0.8, 0.5
+    cx = 0.0  # box left edge x
+    fig, ax = plt.subplots(figsize=(7.2, 9.2))
+    ys = [-(i * (bh + gap)) for i in range(n)]
     for i, (title, sub, color) in enumerate(stages):
-        x = i * (bw + gap)
-        ax.add_patch(FancyBboxPatch((x, 0), bw, bh, boxstyle="round,pad=0.04,rounding_size=0.12",
+        y = ys[i]
+        ax.add_patch(FancyBboxPatch((cx, y), bw, bh, boxstyle="round,pad=0.03,rounding_size=0.10",
                                     fc=color, ec="none"))
-        ax.text(x + bw / 2, 0.66, title, ha="center", va="center", color="white",
-                fontsize=9.5, fontweight="bold")
-        ax.text(x + bw / 2, 0.30, sub, ha="center", va="center", color="white", fontsize=7.5)
+        ax.text(cx + 0.25, y + bh * 0.62, title, ha="left", va="center", color="white",
+                fontsize=12, fontweight="bold")
+        ax.text(cx + 0.25, y + bh * 0.24, sub, ha="left", va="center", color="white", fontsize=9)
         if i < n - 1:
-            ax.add_patch(FancyArrowPatch((x + bw, bh / 2), (x + bw + gap, bh / 2),
-                                         arrowstyle="-|>", mutation_scale=14, color="#333", lw=1.4))
-    # annotations: reject drop-off under s3, human review above s7->s8
-    sx = 2 * (bw + gap)
-    ax.add_patch(FancyArrowPatch((sx + bw / 2, 0), (sx + bw / 2, -0.55),
-                                 arrowstyle="-|>", mutation_scale=12, color="#c0392b", lw=1.3))
-    ax.text(sx + bw / 2, -0.8, "rejected\n(kept as audit log)", ha="center", va="top",
-            fontsize=7.5, color="#c0392b")
-    hx = 6 * (bw + gap)
-    ax.add_patch(FancyBboxPatch((hx - 0.1, 1.5), bw + 0.2, 0.5,
-                                boxstyle="round,pad=0.04,rounding_size=0.1", fc=HUMAN, ec="none"))
-    ax.text(hx + bw / 2, 1.75, "human review -> gold", ha="center", va="center",
-            color="white", fontsize=8, fontweight="bold")
-    ax.add_patch(FancyArrowPatch((hx + bw / 2, 1.5), (hx + bw / 2, bh),
-                                 arrowstyle="-|>", mutation_scale=12, color="#333", lw=1.2))
-    ax.text(-0.1, 1.9, "Manifest (data/manifest.jsonl) is the single source of truth; "
-            "every stage reads and writes it.", fontsize=8, style="italic", color="#444")
-    ax.set_xlim(-0.3, n * (bw + gap)); ax.set_ylim(-1.4, 2.2); ax.axis("off")
-    fig.tight_layout(); fig.savefig(f"{OUT}/fig_pipeline.png", dpi=150); plt.close(fig)
+            ax.add_patch(FancyArrowPatch((cx + bw / 2, y), (cx + bw / 2, y - gap),
+                                         arrowstyle="-|>", mutation_scale=16, color="#333", lw=1.6))
+    # reject branch off s3 (index 2) to the right
+    y3 = ys[2]
+    ax.add_patch(FancyArrowPatch((cx + bw, y3 + bh / 2), (cx + bw + 1.0, y3 + bh / 2),
+                                 arrowstyle="-|>", mutation_scale=14, color=REJ, lw=1.5))
+    ax.text(cx + bw + 1.1, y3 + bh / 2, "rejected\n(kept as\naudit log)", ha="left", va="center",
+            fontsize=9, color=REJ)
+    # human-review box feeding into s8 (between s7 idx6 and s8 idx7)
+    yh = (ys[6] + ys[7]) / 2 + bh / 2
+    ax.add_patch(FancyBboxPatch((cx + bw + 0.7, yh - 0.3), 2.2, 0.6,
+                                boxstyle="round,pad=0.03,rounding_size=0.10", fc=HUMAN, ec="none"))
+    ax.text(cx + bw + 0.7 + 1.1, yh, "human review\n-> gold split", ha="center", va="center",
+            color="white", fontsize=9, fontweight="bold")
+    ax.add_patch(FancyArrowPatch((cx + bw + 0.7, yh), (cx + bw / 2 + 0.2, ys[7] + bh / 2 + 0.15),
+                                 arrowstyle="-|>", mutation_scale=13, color="#333", lw=1.3,
+                                 connectionstyle="arc3,rad=0.25"))
+    ax.text(cx, ys[0] + bh + 0.55,
+            "data/manifest.jsonl = single source of truth\n(every stage reads & writes it)",
+            ha="left", va="bottom", fontsize=9.5, style="italic", color="#444")
+    ax.set_xlim(cx - 0.3, cx + bw + 3.2)
+    ax.set_ylim(ys[-1] - 0.4, ys[0] + bh + 1.3)
+    ax.axis("off")
+    fig.tight_layout(); fig.savefig(f"{OUT}/fig_pipeline.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 
 def run():
