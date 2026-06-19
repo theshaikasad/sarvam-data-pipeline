@@ -21,9 +21,9 @@ The brief is graded on **data quality and curation judgment, not code**, so this
 
 Before any pipeline, I wrote a throwaway end-to-end script on a *single* YouTube link to de-risk the Sarvam APIs and the data shape:
 
-> `yt-dlp` -> `raw.wav`  ->  `ffmpeg` -> 16 kHz mono  ->  cut one ~25 s clip  ->  `librosa` features  ->  `saaras:v3` transcript  ->  `sarvam-30b` tags  ->  one JSONL row.
+> `yt-dlp` -> `raw.wav`    `ffmpeg` -> 16 kHz mono (`norm.wav`)    cut a **fixed 30 s segment from 0:60** (`clip_000.wav`)    `librosa` features    `saaras:v3` transcript    `sarvam-30b` -> emotion / style / confidence / reasoning    one `manifest.jsonl` row.
 
-It answered three questions cheaply: *can I get clean 16 kHz audio from YouTube, does Saaras handle a ~25 s Telugu/Indian-English clip, and can the LLM return structured tags?* All yes. Everything after that was **curation** — the spike had no silence-aware cutting, no music/crowd rejection, no diarization, no human/machine separation, no balancing. Those gates are the actual work.
+It answered three questions cheaply: *can I get clean 16 kHz audio from YouTube, does Saaras handle a ~25 s Telugu/Indian-English clip, and can the LLM return structured tags?* All yes. Crucially, that **fixed-time 30 s cut** is exactly the naive approach the production pipeline had to replace — it chops mid-word and ignores who's speaking. Everything after the spike was **curation**: silence-aware cutting, music/crowd rejection, diarization, the human/machine split, and balancing. Those gates are the actual work.
 
 ---
 
@@ -160,6 +160,10 @@ Most quality came from catching the pipeline *silently* doing the wrong thing.
 ---
 
 ## 6. What I'd improve given more time
+
+**Process (the honest one first): verify each stage before chaining it, and don't outsource the thinking.** My biggest mistake was *how* I built it: once the one-clip spike worked, I implemented `s1`–`s8` in one sweep and only discovered the **silent** failures — the music filter detecting nothing, `sarvam-30b` returning empty `content` — when I ran the whole chain end-to-end, instead of validating each stage on a few clips first. Leaning heavily on AI agents for the implementation made it easy to accept plausible-looking code without checking each component's output myself, so bugs hid behind stages that "succeeded." Next time I'd (a) write a tiny smoke test per stage — run it on 2-3 clips and assert the exact manifest fields it should produce before moving on — and (b) treat the AI as a pair-programmer whose output I review stage-by-stage, not as the driver. Most of the war-stories in §3 would have been caught in minutes instead of mid-run.
+
+Technical improvements:
 
 - **Better noise detection & removal** (top priority — the crowd-noise leak). Replace the single coarse threshold with: (a) **per-clip SNR** from the silence regions, rejecting on SNR not just noise-fraction; (b) a **learned audio-event tagger** (YAMNet/PANNs for applause/laughter/crowd/music) as a finer second opinion that rejects on *any* strong non-speech event over the voice; (c) **targeted denoising** (RNNoise / DeepFilterNet) on borderline clips only, with a before/after check so it never touches clean audio; (d) a lower review threshold so more borderline clips reach the human ear.
 - **Smaller clips to reduce 2-speaker overlap.** Shorter windows (~8-12 s vs ~25 s) span fewer speaker turns, so the odds of two voices (or a guest interjection) in one clip drop sharply — important for podcasts/interviews. Trade-off: more clips and ASR calls. I'd pair it with a per-clip diarization-confidence check that drops any clip with second-speaker energy.
